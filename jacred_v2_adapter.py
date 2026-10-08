@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = 60
 CACHE_MAX_ENTRIES = 128
@@ -524,12 +524,19 @@ def query_jacred(query, year, media_type):
 
 def parse_publish_date(value):
     value = clean(value)
-    for fmt in ("%m/%d/%Y %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+    for fmt in (
+        "%m/%d/%Y %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+    ):
         try:
             return datetime.strptime(value, fmt).strftime("%a, %d %b %Y %H:%M:%S GMT")
         except ValueError:
             pass
-    return value
+    # Torznab/Prowlarr requires every RSS item to contain a valid pubDate.
+    # JacRed normally supplies PublishDate, but keep the feed valid when it
+    # is missing or has an unexpected format.
+    return datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
 
 
 def add_text(parent, name, value):
@@ -650,6 +657,7 @@ def make_feed(results):
 
 def make_test_feed():
     item = {
+        "PublishDate": "10/03/2019 00:00:00",
         "Title": "The Gentlemen (2019) WEB-DL 720p | JacRed V2 local test",
         "Details": "http://127.0.0.1:9128/torznab/api?t=search&q=jacred-v2-local-test",
         "MagnetUri": f"magnet:?xt=urn:btih:{TEST_INFOHASH}&dn=JacRed+V2+local+test",
