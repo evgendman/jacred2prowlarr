@@ -3,6 +3,10 @@
 import html
 import json
 import re
+import sys
+import threading
+import time
+import traceback
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -11,12 +15,90 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.1.0"
+VERSION = "2.2.0"
+SERVER_TITLE = "JacRed TV + Movies"
+CACHE_TTL_SECONDS = 60
+CACHE_MAX_ENTRIES = 128
 JACRED_URL = "https://jac.red/api/v2.0/indexers/all/results"
 TORZNAB_NS = "http://torznab.com/schemas/2015/feed"
 
 TV_CATEGORIES = {5000, 5070}
 MOVIE_CATEGORIES = {2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060, 2070, 2080, 2090}
+
+TEST_INFOHASH = "0000000000000000000000000000000000000001"
+
+# Cache complete Torznab responses for a short period. The cache key contains
+# every query parameter that can affect the adapter output; the API key is
+# deliberately ignored so identical searches from different clients share
+# one cached response.
+CACHE_LOCK = threading.Lock()
+CACHE = {}
+INFLIGHT_LOCKS = {}
+
+
+def cache_key(params):
+    pairs = []
+    for name, values in params.items():
+        if name.lower() == "apikey":
+            continue
+        pairs.append(
+            (
+                name.lower(),
+                tuple(sorted(clean(v) for v in values)),
+            )
+        )
+    return tuple(sorted(pairs))
+
+
+def get_inflight_lock(key):
+    with CACHE_LOCK:
+        lock = INFLIGHT_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            INFLIGHT_LOCKS[key] = lock
+        return lock
+
+
+def prune_cache(now):
+    expired = [
+        key
+        for key, (created, _) in CACHE.items()
+        if now - created >= CACHE_TTL_SECONDS
+    ]
+    for key in expired:
+        CACHE.pop(key, None)
+
+    if len(CACHE) <= CACHE_MAX_ENTRIES:
+        return
+
+    oldest = sorted(CACHE.items(), key=lambda entry: entry[1][0])
+    for key, _ in oldest[: len(CACHE) - CACHE_MAX_ENTRIES]:
+        CACHE.pop(key, None)
+
+
+def cached_request(key, producer):
+    now = time.monotonic()
+    with CACHE_LOCK:
+        cached = CACHE.get(key)
+        if cached and now - cached[0] < CACHE_TTL_SECONDS:
+            return cached[1], True
+
+    lock = get_inflight_lock(key)
+    with lock:
+        now = time.monotonic()
+        with CACHE_LOCK:
+            cached = CACHE.get(key)
+            if cached and now - cached[0] < CACHE_TTL_SECONDS:
+                return cached[1], True
+
+        # Do not cache producer exceptions (including JacRed 429/5xx).
+        result = producer()
+
+        now = time.monotonic()
+        with CACHE_LOCK:
+            CACHE[key] = (now, result)
+            prune_cache(now)
+        return result, False
 
 
 def clean(value):
@@ -468,8 +550,8 @@ def make_caps():
         caps,
         "server",
         version="1.0",
-        title="JacRed V2",
-        strapline="JacRed v2 JSON to Torznab adapter",
+        title=SERVER_TITLE,
+        strapline="JacRed v2 TV + Movies JSON to Torznab adapter",
         url=f"http://127.0.0.1:{PORT}/",
     )
     ET.SubElement(caps, "limits", max="1000", **{"default": "100"})
@@ -487,9 +569,9 @@ def make_caps():
 def make_feed(results):
     rss = ET.Element("rss", version="2.0", **{"xmlns:torznab": TORZNAB_NS})
     channel = ET.SubElement(rss, "channel")
-    add_text(channel, "title", "JacRed V2")
+    add_text(channel, "title", SERVER_TITLE)
     add_text(channel, "link", "https://jac.red/")
-    add_text(channel, "description", "JacRed v2 JSON to Torznab adapter")
+    add_text(channel, "description", "JacRed v2 TV + Movies JSON to Torznab adapter")
 
     for item, media_type in results:
         node = ET.SubElement(channel, "item")
@@ -523,7 +605,7 @@ def make_feed(results):
                 "enclosure",
                 url=magnet,
                 length=str(size),
-                type="application/x-bittorrent;x-scheme-handler=magnet",
+                type="application/x-bittorrent",
             )
 
         add_attr(node, "category", category_id)
@@ -563,6 +645,28 @@ def make_feed(results):
 
 
 # ----------------------------------------------------------------
+# Local test response
+# ----------------------------------------------------------------
+
+def make_test_feed():
+    item = {
+        "Title": "The Gentlemen (2019) WEB-DL 720p | JacRed V2 local test",
+        "Details": "http://127.0.0.1:9128/torznab/api?t=search&q=jacred-v2-local-test",
+        "MagnetUri": f"magnet:?xt=urn:btih:{TEST_INFOHASH}&dn=JacRed+V2+local+test",
+        "Size": 1,
+        "Seeders": 0,
+        "Peers": 0,
+        "Category": [2000],
+        "info": {
+            "name": "The Gentlemen",
+            "relased": "10/03/2019 00:00:00",
+            "quality": "720p",
+        },
+    }
+    return make_feed([(item, "movie")])
+
+
+# ----------------------------------------------------------------
 # HTTP
 # ----------------------------------------------------------------
 
@@ -594,9 +698,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_xml(make_feed([]))
             return
 
+        # Prowlarr uses an empty generic search as an indexer connectivity test.
+        # Answer it locally so repeated tests do not consume JacRed requests.
+        query = params.get("q", [""])[0].strip()
+        if request_type == "search" and not query:
+            has_ids = any(params.get(k) for k in ("imdbid", "tvdbid", "tmdbid"))
+            has_other_search_terms = any(
+                params.get(k, [""])[0].strip()
+                for k in ("season", "ep", "year", "cat")
+            )
+            if not has_ids and not has_other_search_terms:
+                self.send_xml(
+                    make_test_feed(),
+                    "application/rss+xml; charset=utf-8",
+                )
+                return
+
         requested = {as_int(x) for x in params.get("cat", [""])[0].split(",") if as_int(x)}
         media_types = requested_media_types(request_type, requested)
-        query = params.get("q", [""])[0].strip()
         season = params.get("season", [""])[0].strip()
         episode = params.get("ep", [""])[0].strip()
         year = params.get("year", [""])[0].strip()
@@ -615,39 +734,49 @@ class Handler(BaseHTTPRequestHandler):
             jac_query = re.sub(r"(?i)\b(?:season|сезон)\s*\d{1,3}\b", " ", jac_query)
             jac_query = re.sub(r"\s+", " ", jac_query).strip() or query
 
+        request_cache_key = cache_key(params)
+
+        def build_response():
+            try:
+                results = []
+
+                for media_type in sorted(media_types):
+                    for item in query_jacred(jac_query, year, media_type):
+                        if item_media_type(item) != media_type:
+                            continue
+                        if not item_matches_categories(item, requested, media_type):
+                            continue
+                        if media_type == "tv" and not result_matches_season_episode(item, season, episode):
+                            continue
+                        results.append((item, media_type))
+
+                unique, seen = [], set()
+                for item, media_type in results:
+                    key_value = clean(
+                        item.get("MagnetUri")
+                        or item.get("Details")
+                        or item.get("Title")
+                    ).casefold()
+                    key = (media_type, key_value)
+                    if not key_value or key in seen:
+                        continue
+                    seen.add(key)
+                    unique.append((item, media_type))
+
+                limit = max(1, min(as_int(params.get("limit", ["100"])[0], 100), 1000))
+                offset = max(0, as_int(params.get("offset", ["0"])[0], 0))
+                return make_feed(unique[offset:offset + limit])
+
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+                raise
+
         try:
-            results = []
-
-            for media_type in sorted(media_types):
-                for item in query_jacred(jac_query, year, media_type):
-                    if item_media_type(item) != media_type:
-                        continue
-                    if not item_matches_categories(item, requested, media_type):
-                        continue
-                    if media_type == "tv" and not result_matches_season_episode(item, season, episode):
-                        continue
-                    results.append((item, media_type))
-
-            unique, seen = [], set()
-            for item, media_type in results:
-                key_value = clean(
-                    item.get("MagnetUri")
-                    or item.get("Details")
-                    or item.get("Title")
-                ).casefold()
-                key = (media_type, key_value)
-                if not key_value or key in seen:
-                    continue
-                seen.add(key)
-                unique.append((item, media_type))
-
-            limit = max(1, min(as_int(params.get("limit", ["100"])[0], 100), 1000))
-            offset = max(0, as_int(params.get("offset", ["0"])[0], 0))
+            xml, from_cache = cached_request(request_cache_key, build_response)
             self.send_xml(
-                make_feed(unique[offset:offset + limit]),
+                xml,
                 "application/rss+xml; charset=utf-8",
             )
-
         except Exception as exc:
             body = str(exc).encode("utf-8", errors="replace")
             self.send_response(500)
@@ -657,5 +786,10 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+
 if __name__ == "__main__":
+    print(
+        f"{SERVER_TITLE} v{VERSION} listening on http://{HOST}:{PORT}/torznab",
+        flush=True,
+    )
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
