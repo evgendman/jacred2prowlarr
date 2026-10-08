@@ -4,7 +4,7 @@ JacRed v2 JSON → Torznab adapter for Prowlarr.
 
 ## Current version
 
-**2.2.1**
+**2.2.2**
 
 The adapter runs as the existing `jacred-v2-adapter.service` and listens on:
 
@@ -27,6 +27,8 @@ Recommended Prowlarr indexer name:
 A generic Torznab `t=search` request without a real `q` is answered locally with a synthetic test release.
 
 The synthetic release includes a valid `pubDate` required by Prowlarr/Torznab clients.
+
+JacRed source dates in RFC3339/RFC3339Nano form are parsed correctly; malformed dates never fall back to the current time.
 
 The adapter does **not** contact `jac.red` for this connectivity test, so repeated Prowlarr/Sonarr/Radarr tests do not consume JacRed requests.
 
@@ -65,3 +67,7 @@ Service:
 `jacred-v2-adapter.service`
 
 See [ROADMAP.md](ROADMAP.md) for the project history and remaining validation work.
+
+## Upstream error handling
+
+When a generic search needs both TV and Movies, an upstream failure in one media type no longer discards successful results from the other type. Partial responses are not cached.
