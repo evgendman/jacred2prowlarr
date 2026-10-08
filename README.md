@@ -4,11 +4,15 @@ JacRed v2 JSON → Torznab adapter for Prowlarr.
 
 ## Current version
 
-**2.1.0**
+**2.2.0**
 
 The adapter runs as the existing `jacred-v2-adapter.service` and listens on:
 
 `http://127.0.0.1:9128/torznab`
+
+Recommended Prowlarr indexer name:
+
+**JacRed TV + Movies**
 
 ## Supported media
 
@@ -17,6 +21,22 @@ The adapter runs as the existing `jacred-v2-adapter.service` and listens on:
 - Torznab `tv-search`
 - Torznab `movie-search`
 - Generic `search`
+
+## Prowlarr test protection
+
+A generic Torznab `t=search` request without a real `q` is answered locally with a synthetic test release.
+
+The adapter does **not** contact `jac.red` for this connectivity test, so repeated Prowlarr/Sonarr/Radarr tests do not consume JacRed requests.
+
+## Request cache
+
+Successful Torznab responses are cached in memory for **60 seconds**, with a maximum of **128** entries.
+
+The cache key covers the query parameters that affect the adapter response. The API key itself is ignored so identical searches from different clients can share one response.
+
+Concurrent identical requests use the same in-flight cache key, preventing duplicate upstream JacRed requests.
+
+Failures and rate-limit responses are never cached as successful results.
 
 ## Quality
 
@@ -30,6 +50,8 @@ This preserves JacRed's 1080p information when the release title itself omits `1
 
 4K HDR is represented as `2160p HDR` when HDR/Dolby Vision markers are available.
 
+Torznab torrent enclosures use the standard `application/x-bittorrent` MIME type; the magnet URI remains in the enclosure URL and Torznab `magneturl` attribute.
+
 ## Deployment
 
 The installed systemd service uses:
@@ -40,8 +62,4 @@ Service:
 
 `jacred-v2-adapter.service`
 
-## Roadmap
-
-The planned next step is to protect `jac.red` from redundant requests: Prowlarr test requests without a real search query will be answered locally, and identical recent JacRed searches will be served from a short-lived cache.
-
-See [ROADMAP.md](ROADMAP.md) for the implementation and validation plan.
+See [ROADMAP.md](ROADMAP.md) for the project history and remaining validation work.
