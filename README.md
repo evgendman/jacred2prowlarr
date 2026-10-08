@@ -39,3 +39,9 @@ The installed systemd service uses:
 Service:
 
 `jacred-v2-adapter.service`
+
+## Roadmap
+
+The planned next step is to protect `jac.red` from redundant requests: Prowlarr test requests without a real search query will be answered locally, and identical recent JacRed searches will be served from a short-lived cache.
+
+See [ROADMAP.md](ROADMAP.md) for the implementation and validation plan.
