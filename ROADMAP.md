@@ -18,12 +18,13 @@ During validation, confirm:
 - a changed query, category, season/episode, year, limit, or offset still produces an independent response;
 - a failed/rate-limited JacRed request is not cached.
 
-## Implemented in v2.2.0
+## Implemented in v2.2.0 / v2.2.1
 
 ### 1. Local response for Prowlarr test requests
 - Detect generic Torznab `t=search` requests without a real `q`.
 - Do not query `jac.red` for the normal connectivity test.
 - Return a small synthetic local test release.
+- Include a valid RSS `pubDate` in the synthetic release.
 - Use standard `application/x-bittorrent` for the torrent enclosure.
 
 ### 2. Cache identical recent requests
