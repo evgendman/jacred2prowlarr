@@ -405,7 +405,11 @@ def item_matches_categories(item, requested, media_type):
     if media_type == "movie":
         if not cats & MOVIE_CATEGORIES:
             return False
-        return 2000 in requested or bool(cats & requested & MOVIE_CATEGORIES)
+        # JacRed v2 may expose a movie only as parent category 2000.
+        # A Torznab request for a movie subcategory must still return
+        # the movie; the adapter must not invent a more specific source
+        # category that JacRed did not provide.
+        return bool(requested & MOVIE_CATEGORIES)
     if not cats & TV_CATEGORIES:
         return False
     return 5000 in requested or bool(cats & requested & TV_CATEGORIES)
