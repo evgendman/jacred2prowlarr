@@ -10,12 +10,12 @@ import traceback
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.1"
+VERSION = "2.2.2"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = 60
 CACHE_MAX_ENTRIES = 128
@@ -81,7 +81,7 @@ def cached_request(key, producer):
     with CACHE_LOCK:
         cached = CACHE.get(key)
         if cached and now - cached[0] < CACHE_TTL_SECONDS:
-            return cached[1], True
+            return cached[1][0], True
 
     lock = get_inflight_lock(key)
     with lock:
@@ -89,15 +89,16 @@ def cached_request(key, producer):
         with CACHE_LOCK:
             cached = CACHE.get(key)
             if cached and now - cached[0] < CACHE_TTL_SECONDS:
-                return cached[1], True
+                return cached[1][0], True
 
         # Do not cache producer exceptions (including JacRed 429/5xx).
-        result = producer()
+        result, cacheable = producer()
 
         now = time.monotonic()
-        with CACHE_LOCK:
-            CACHE[key] = (now, result)
-            prune_cache(now)
+        if cacheable:
+            with CACHE_LOCK:
+                CACHE[key] = (now, (result, True))
+                prune_cache(now)
         return result, False
 
 
@@ -524,19 +525,36 @@ def query_jacred(query, year, media_type):
 
 def parse_publish_date(value):
     value = clean(value)
-    for fmt in (
-        "%m/%d/%Y %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S.%f",
-    ):
+    if value:
         try:
-            return datetime.strptime(value, fmt).strftime("%a, %d %b %Y %H:%M:%S GMT")
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
         except ValueError:
             pass
-    # Torznab/Prowlarr requires every RSS item to contain a valid pubDate.
-    # JacRed normally supplies PublishDate, but keep the feed valid when it
-    # is missing or has an unexpected format.
-    return datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+        for fmt in (
+            "%m/%d/%Y %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%f",
+        ):
+            try:
+                parsed = datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+                return parsed.strftime("%a, %d %b %Y %H:%M:%S GMT")
+            except ValueError:
+                pass
+
+    # Never turn a malformed/missing source date into "now": that creates a
+    # misleading 0-minute age in Prowlarr. A fixed epoch date keeps the RSS
+    # item valid while clearly representing an unknown timestamp.
+    if value:
+        print(
+            f"WARNING invalid JacRed PublishDate: {value!r}",
+            file=sys.stderr,
+            flush=True,
+        )
+    return "Thu, 01 Jan 1970 00:00:00 GMT"
 
 
 def add_text(parent, name, value):
@@ -747,9 +765,26 @@ class Handler(BaseHTTPRequestHandler):
         def build_response():
             try:
                 results = []
+                errors = []
 
                 for media_type in sorted(media_types):
-                    for item in query_jacred(jac_query, year, media_type):
+                    try:
+                        upstream_results = query_jacred(jac_query, year, media_type)
+                        print(
+                            f"UPSTREAM OK type={media_type} q={jac_query!r} count={len(upstream_results)}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    except Exception as exc:
+                        errors.append((media_type, exc))
+                        print(
+                            f"UPSTREAM ERROR type={media_type} q={jac_query!r}: {exc}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        continue
+
+                    for item in upstream_results:
                         if item_media_type(item) != media_type:
                             continue
                         if not item_matches_categories(item, requested, media_type):
@@ -757,6 +792,9 @@ class Handler(BaseHTTPRequestHandler):
                         if media_type == "tv" and not result_matches_season_episode(item, season, episode):
                             continue
                         results.append((item, media_type))
+
+                if errors and not results:
+                    raise errors[0][1]
 
                 unique, seen = [], set()
                 for item, media_type in results:
@@ -773,7 +811,10 @@ class Handler(BaseHTTPRequestHandler):
 
                 limit = max(1, min(as_int(params.get("limit", ["100"])[0], 100), 1000))
                 offset = max(0, as_int(params.get("offset", ["0"])[0], 0))
-                return make_feed(unique[offset:offset + limit])
+                return (
+                    make_feed(unique[offset:offset + limit]),
+                    not errors,
+                )
 
             except Exception:
                 traceback.print_exc(file=sys.stderr)
