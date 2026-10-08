@@ -4,7 +4,7 @@ JacRed v2 JSON → Torznab adapter for Prowlarr.
 
 ## Current version
 
-**2.2.0**
+**2.2.1**
 
 The adapter runs as the existing `jacred-v2-adapter.service` and listens on:
 
@@ -25,6 +25,8 @@ Recommended Prowlarr indexer name:
 ## Prowlarr test protection
 
 A generic Torznab `t=search` request without a real `q` is answered locally with a synthetic test release.
+
+The synthetic release includes a valid `pubDate` required by Prowlarr/Torznab clients.
 
 The adapter does **not** contact `jac.red` for this connectivity test, so repeated Prowlarr/Sonarr/Radarr tests do not consume JacRed requests.
 
