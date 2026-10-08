@@ -773,6 +773,12 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             xml, from_cache = cached_request(request_cache_key, build_response)
+            print(
+                f"CACHE {'HIT' if from_cache else 'MISS'} "
+                f"type={request_type} q={query!r}",
+                file=sys.stderr,
+                flush=True,
+            )
             self.send_xml(
                 xml,
                 "application/rss+xml; charset=utf-8",
