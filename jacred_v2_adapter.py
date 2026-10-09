@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.9"
+VERSION = "2.2.10"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -463,6 +463,20 @@ def normalize_season_episode(title):
         if match.lastindex and match.lastindex >= 3 and match.group(3):
             result += f"-{int(match.group(3)):02d}"
         return result
+    # Detect a collection covering multiple seasons before the generic
+    # "N seasons" fallback, otherwise "1-11 сезоны" incorrectly becomes S11.
+    collection_patterns = (
+        r"\b(\d{1,3})\s*[-–—]\s*(\d{1,3})\s+(?:сез\w*|seasons?)\b",
+        r"\b(?:сезон\w*|seasons?)\s*(\d{1,3})\s*[-–—]\s*(\d{1,3})\b",
+    )
+    for pattern in collection_patterns:
+        collection = re.search(pattern, title, re.IGNORECASE)
+        if collection:
+            first = int(collection.group(1))
+            last = int(collection.group(2))
+            if last > first:
+                return f"S{first:02d}-S{last:02d}"
+
     match = re.search(r"\b(\d{1,3})\s*(?:-?(?:й|ой|ый|ого|го|ему|ому|му|м|ом|ым))?\s+сез\w*", title, re.IGNORECASE)
     return f"S{int(match.group(1)):02d}" if match else ""
 
