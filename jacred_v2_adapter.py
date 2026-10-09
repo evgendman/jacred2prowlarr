@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import email.utils
+import hashlib
 import html
 import json
 import os
@@ -18,13 +19,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.5"
+VERSION = "2.2.6"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
 JACRED_MIN_INTERVAL_MS = max(0, int(os.environ.get("JACRED_MIN_INTERVAL_MS", "1000")))
 JACRED_429_BACKOFF_SECONDS = max(1, int(os.environ.get("JACRED_429_BACKOFF_SECONDS", "60")))
 JACRED_MAX_QUEUE_WAIT_SECONDS = max(1, int(os.environ.get("JACRED_MAX_QUEUE_WAIT_SECONDS", "10")))
+REQUEST_PARAMS_LOGGING = os.environ.get("JACRED_LOG_REQUEST_PARAMS", "0").strip().lower() in {"1", "true", "yes", "on"}
 JACRED_URL = "https://jac.red/api/v2.0/indexers/all/results"
 TORZNAB_NS = "http://torznab.com/schemas/2015/feed"
 
@@ -113,6 +115,33 @@ def wait_for_upstream_slot(deadline):
                 )
 
         time.sleep(delay)
+
+
+def log_request_diagnostics(params, key):
+    if not REQUEST_PARAMS_LOGGING:
+        return
+
+    # Query-string parameters are useful when diagnosing cache misses, but
+    # credential-like values must never be written to the journal.
+    safe_params = {}
+    secret_names = {
+        "apikey", "xapikey", "key", "token", "accesstoken",
+        "password", "secret", "authorization",
+    }
+    for name, values in params.items():
+        normalized = re.sub(r"[^a-z0-9]", "", name.casefold())
+        if normalized in secret_names:
+            continue
+        safe_params[name] = values
+
+    key_signature = hashlib.sha256(repr(key).encode("utf-8")).hexdigest()[:12]
+    print(
+        "REQUEST PARAMS "
+        f"cache_key={key_signature} "
+        f"params={json.dumps(safe_params, ensure_ascii=False, sort_keys=True)}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def cache_key(params):
@@ -914,6 +943,7 @@ class Handler(BaseHTTPRequestHandler):
             jac_query = re.sub(r"\s+", " ", jac_query).strip() or query
 
         request_cache_key = cache_key(params)
+        log_request_diagnostics(params, request_cache_key)
 
         def build_response():
             try:
