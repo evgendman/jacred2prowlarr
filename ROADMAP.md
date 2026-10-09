@@ -61,3 +61,10 @@ During validation, confirm:
 - Treat a category-only generic Prowlarr test as a local connectivity test; category filters alone no longer bypass the synthetic response.
 - Remove the invented `the gentlemen` fallback query.
 - Return an empty feed for other requests without `q`, so no empty or synthetic query reaches JacRed.
+
+
+## Implemented in v2.2.5
+
+- Generate local synthetic test results by Torznab request type and category: movie for Radarr, TV for Sonarr, and both for an unfiltered generic Prowlarr connectivity test.
+- Echo requested supported movie subcategories in the synthetic movie item and the Anime subcategory when explicitly requested for the TV test item.
+- Keep empty-query connectivity tests local; structured requests without a query return an empty feed, never a fabricated upstream search.
