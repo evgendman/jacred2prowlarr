@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.3"
+VERSION = "2.2.4"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -839,9 +839,11 @@ class Handler(BaseHTTPRequestHandler):
         query = params.get("q", [""])[0].strip()
         if request_type == "search" and not query:
             has_ids = any(params.get(k) for k in ("imdbid", "tvdbid", "tmdbid"))
+            # A category filter is not a search term; category-only test
+            # requests should still be answered locally without querying JacRed.
             has_other_search_terms = any(
                 params.get(k, [""])[0].strip()
-                for k in ("season", "ep", "year", "cat")
+                for k in ("season", "ep", "year")
             )
             if not has_ids and not has_other_search_terms:
                 self.send_xml(
@@ -857,11 +859,11 @@ class Handler(BaseHTTPRequestHandler):
         year = params.get("year", [""])[0].strip()
 
         if not query:
-            has_ids = any(params.get(k) for k in ("imdbid", "tvdbid", "tmdbid"))
-            if season or episode or year or has_ids:
-                self.send_xml(make_feed([]))
-                return
-            query = "the gentlemen"
+            # Never forward an empty or invented query to JacRed.
+            # ID/season/year-only requests are unsupported without q; generic
+            # connectivity tests were handled above with a local test feed.
+            self.send_xml(make_feed([]))
+            return
 
         jac_query = query
         if "tv" in media_types:
