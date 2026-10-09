@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.4"
+VERSION = "2.2.5"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -32,6 +32,7 @@ TV_CATEGORIES = {5000, 5070}
 MOVIE_CATEGORIES = {2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060, 2070, 2080, 2090}
 
 TEST_INFOHASH = "0000000000000000000000000000000000000001"
+TEST_TV_INFOHASH = "0000000000000000000000000000000000000002"
 
 # Cache complete Torznab responses for a short period. The cache key contains
 # every query parameter that can affect the adapter output; the API key is
@@ -783,23 +784,53 @@ def make_feed(results):
 # Local test response
 # ----------------------------------------------------------------
 
-def make_test_feed():
-    item = {
-        "PublishDate": "10/03/2019 00:00:00",
-        "Title": "The Gentlemen (2019) WEB-DL 720p | JacRed V2 local test",
-        "Details": "http://127.0.0.1:9128/torznab/api?t=search&q=jacred-v2-local-test",
-        "MagnetUri": f"magnet:?xt=urn:btih:{TEST_INFOHASH}&dn=JacRed+V2+local+test",
-        "Size": 1,
-        "Seeders": 0,
-        "Peers": 0,
-        "Category": [2000],
-        "info": {
-            "name": "The Gentlemen",
-            "relased": "10/03/2019 00:00:00",
-            "quality": "720p",
-        },
-    }
-    return make_feed([(item, "movie")])
+def make_test_feed(media_types, requested_categories=None):
+    requested_categories = requested_categories or set()
+    results = []
+
+    if "movie" in media_types:
+        movie_categories = {2000} | (requested_categories & MOVIE_CATEGORIES)
+        movie = {
+            "PublishDate": "10/03/2019 00:00:00",
+            "Title": "The Gentlemen (2019) WEB-DL 720p | JacRed V2 local movie test",
+            "Details": "http://127.0.0.1:9128/torznab/api?t=search&q=jacred-v2-local-test",
+            "MagnetUri": f"magnet:?xt=urn:btih:{TEST_INFOHASH}&dn=JacRed+V2+local+movie+test",
+            "Size": 1,
+            "Seeders": 0,
+            "Peers": 0,
+            "Category": sorted(movie_categories),
+            "info": {
+                "name": "The Gentlemen",
+                "relased": "10/03/2019 00:00:00",
+                "quality": "720p",
+                "types": ["movie"],
+            },
+        }
+        results.append((movie, "movie"))
+
+    if "tv" in media_types:
+        tv_categories = {5000}
+        if 5070 in requested_categories:
+            tv_categories.add(5070)
+        tv = {
+            "PublishDate": "10/03/2024 00:00:00",
+            "Title": "The Gentlemen (2024) WEB-DL 1080p | JacRed V2 local TV test",
+            "Details": "http://127.0.0.1:9128/torznab/api?t=search&q=jacred-v2-local-test-tv",
+            "MagnetUri": f"magnet:?xt=urn:btih:{TEST_TV_INFOHASH}&dn=JacRed+V2+local+TV+test",
+            "Size": 1,
+            "Seeders": 0,
+            "Peers": 0,
+            "Category": sorted(tv_categories),
+            "info": {
+                "name": "The Gentlemen",
+                "relased": "10/03/2024 00:00:00",
+                "quality": "1080p",
+                "types": ["series"],
+            },
+        }
+        results.append((tv, "tv"))
+
+    return make_feed(results)
 
 
 # ----------------------------------------------------------------
@@ -834,36 +865,46 @@ class Handler(BaseHTTPRequestHandler):
             self.send_xml(make_feed([]))
             return
 
-        # Prowlarr uses an empty generic search as an indexer connectivity test.
-        # Answer it locally so repeated tests do not consume JacRed requests.
         query = params.get("q", [""])[0].strip()
-        if request_type == "search" and not query:
-            has_ids = any(params.get(k) for k in ("imdbid", "tvdbid", "tmdbid"))
-            # A category filter is not a search term; category-only test
-            # requests should still be answered locally without querying JacRed.
-            has_other_search_terms = any(
-                params.get(k, [""])[0].strip()
-                for k in ("season", "ep", "year")
-            )
-            if not has_ids and not has_other_search_terms:
-                self.send_xml(
-                    make_test_feed(),
-                    "application/rss+xml; charset=utf-8",
-                )
-                return
-
         requested = {as_int(x) for x in params.get("cat", [""])[0].split(",") if as_int(x)}
-        media_types = requested_media_types(request_type, requested)
         season = params.get("season", [""])[0].strip()
         episode = params.get("ep", [""])[0].strip()
         year = params.get("year", [""])[0].strip()
 
         if not query:
-            # Never forward an empty or invented query to JacRed.
-            # ID/season/year-only requests are unsupported without q; generic
-            # connectivity tests were handled above with a local test feed.
+            has_ids = any(
+                params.get(k, [""])[0].strip()
+                for k in ("imdbid", "tvdbid", "tmdbid")
+            )
+            # Empty-q connectivity tests are served locally, with item type
+            # and categories matched to the Torznab request.
+            if not has_ids and not (season or episode or year):
+                if request_type == "movie":
+                    test_media_types = {"movie"}
+                elif request_type == "tvsearch":
+                    test_media_types = {"tv"}
+                elif requested:
+                    test_media_types = set()
+                    if requested & MOVIE_CATEGORIES:
+                        test_media_types.add("movie")
+                    if requested & TV_CATEGORIES:
+                        test_media_types.add("tv")
+                else:
+                    # A generic Prowlarr test without categories covers both.
+                    test_media_types = {"movie", "tv"}
+
+                self.send_xml(
+                    make_test_feed(test_media_types, requested),
+                    "application/rss+xml; charset=utf-8",
+                )
+                return
+
+            # A structured search without q cannot be resolved reliably.
+            # Never invent a title or send an empty query to JacRed.
             self.send_xml(make_feed([]))
             return
+
+        media_types = requested_media_types(request_type, requested)
 
         jac_query = query
         if "tv" in media_types:
