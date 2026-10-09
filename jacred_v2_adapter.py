@@ -169,7 +169,8 @@ def cached_request(key, producer):
             if cached and now - cached[0] < CACHE_TTL_SECONDS:
                 return cached[1], True
 
-        # Do not cache producer exceptions (including JacRed 429/5xx).
+        # The producer returns (xml_bytes, cacheable). Cache only complete
+        # successful responses; the HTTP handler always receives XML bytes.
         result, cacheable = producer()
 
         if cacheable:
