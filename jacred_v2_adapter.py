@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.7"
+VERSION = "2.2.8"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -556,6 +556,146 @@ def source_original_title(item):
     return clean(info.get("originalname") or info.get("originalName") or info.get("name") or item.get("Title"))
 
 
+def compact_title(value):
+    tokens = re.findall(r"[a-z0-9а-яё]+", clean(value).casefold())
+    while tokens and tokens[0] in {"the", "a", "an"}:
+        tokens.pop(0)
+    return "".join(tokens)
+
+
+def title_segment_head(value):
+    value = clean(value)
+    value = re.split(r"[\\(\\[\\{]", value, maxsplit=1)[0]
+    value = re.sub(r"(?i)\\s+(?:19|20)\\d{2}(?:\\s*[-–—/]\\s*(?:19|20)?\\d{2})?.*$", "", value)
+    value = re.sub(
+        r"(?i)\\s+(?:2160p|1080p|720p|576p|480p|4k|HDRip|HDTV|WEB-DL|WEB-DLRip|WEBRip|BDRip|BRRip|BluRay|S\\d{1,3}\\b|\\d{1,3}\\s*(?:-?(?:й|ой|ый|ого|го))?\\s+сез\\w*).*$",
+        "",
+        value,
+    )
+    return value.strip(" \\t-–—|,:;")
+
+
+def find_russian_tv_alias(query, items):
+    # Infer a Russian alias only when the queried name appears as one side of
+    # a "localized title / original title" pair in multiple distinct releases.
+    if re.search(r"[А-Яа-яЁё]", clean(query)):
+        return None, 0, 0
+
+    query_key = compact_title(query)
+    if len(query_key) < 4:
+        return None, 0, 0
+
+    votes = {}
+    display_names = {}
+    seen_releases = set()
+    eligible_releases = 0
+
+    for item in items:
+        raw_title = clean(item.get("Title"))
+        if not raw_title:
+            continue
+        identity = (
+            infohash_from_magnet(item.get("MagnetUri"))
+            or clean(item.get("Details")).casefold()
+            or raw_title.casefold()
+        )
+        if identity in seen_releases:
+            continue
+        seen_releases.add(identity)
+
+        segments = re.split(r"\\s+/\\s+", raw_title)
+        matching_indexes = []
+        heads = [title_segment_head(segment) for segment in segments]
+        for index, head in enumerate(heads):
+            head_key = compact_title(head)
+            if head_key and (head_key == query_key or head_key.startswith(query_key) or query_key.startswith(head_key)):
+                matching_indexes.append(index)
+
+        if not matching_indexes:
+            continue
+
+        item_candidates = {}
+        for matched_index in matching_indexes:
+            for index, head in enumerate(heads):
+                if index == matched_index:
+                    continue
+                candidate = title_segment_head(head)
+                if len(re.findall(r"[А-Яа-яЁё]", candidate)) < 3:
+                    continue
+                candidate_key = compact_title(candidate)
+                if not candidate_key or candidate_key == query_key:
+                    continue
+                item_candidates.setdefault(candidate_key, candidate)
+
+        if not item_candidates:
+            continue
+
+        eligible_releases += 1
+        for candidate_key, candidate in item_candidates.items():
+            votes[candidate_key] = votes.get(candidate_key, 0) + 1
+            display_names.setdefault(candidate_key, candidate)
+
+    if not votes:
+        return None, 0, eligible_releases
+
+    best_key = max(votes, key=lambda key: (votes[key], len(display_names[key])))
+    best_count = votes[best_key]
+    # Require multiple independent releases and a clear majority among
+    # titles that also identify the queried series, to avoid generic aliases.
+    if best_count < 2 or best_count / max(1, eligible_releases) < 0.5:
+        return None, best_count, eligible_releases
+
+    return display_names[best_key], best_count, eligible_releases
+
+
+def canonical_tv_title(items, fallback):
+    votes = {}
+    names = {}
+    for item in items:
+        info = item.get("info") or {}
+        value = clean(info.get("originalname") or info.get("originalName") or info.get("name"))
+        if not value or re.search(r"[А-Яа-яЁё]", value):
+            continue
+        value = normalize_tv_original(value)
+        value = re.sub(r"(?i)\\s*[(\\[]?(?:19|20)\\d{2}.*$", "", value).strip()
+        key = compact_title(value)
+        if not key:
+            continue
+        votes[key] = votes.get(key, 0) + 1
+        names.setdefault(key, value)
+
+    if votes:
+        best_key = max(votes, key=lambda key: (votes[key], len(names[key])))
+        return names[best_key]
+    return normalize_tv_original(fallback)
+
+
+def item_mentions_tv_title(item, canonical_title):
+    target = compact_title(canonical_title)
+    if len(target) < 4:
+        return False
+    info = item.get("info") or {}
+    fields = [
+        item.get("Title"),
+        info.get("originalname"),
+        info.get("originalName"),
+        info.get("name"),
+    ]
+    return any(target in compact_title(value) for value in fields if value)
+
+
+def with_canonical_tv_title(item, canonical_title):
+    # Preserve the source release title for season/episode parsing, but expose
+    # the known series name first so Sonarr can map the release to its series.
+    result = dict(item)
+    info = dict(item.get("info") or {})
+    info["originalname"] = canonical_title
+    info["originalName"] = canonical_title
+    info["name"] = canonical_title
+    result["info"] = info
+    return result
+
+
 def normalize_tv_original(text):
     text = re.sub(r"(?i)\s*\[\s*\d{1,3}\s*[xх×]\s*\d{1,4}(?:\s*[-–—]\s*\d{1,4})?(?:\s+из\s+\d{1,4})?\s*\]", "", text)
     text = re.sub(r"(?i)\s+\bS\d{1,3}(?:E\d{1,4}(?:-\d{1,4})?)?\b", "", text)
@@ -1030,6 +1170,51 @@ class Handler(BaseHTTPRequestHandler):
                                 file=sys.stderr,
                                 flush=True,
                             )
+
+                        if media_type == "tv":
+                            alias, alias_votes, alias_evidence = find_russian_tv_alias(
+                                jac_query, upstream_results
+                            )
+                            if alias and compact_title(alias) != compact_title(jac_query):
+                                canonical = canonical_tv_title(upstream_results, jac_query)
+                                print(
+                                    f"TV ALIAS DETECTED q={jac_query!r} alias={alias!r} "
+                                    f"evidence={alias_votes}/{alias_evidence} canonical={canonical!r}",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                                alias_results, alias_cache_hit = cached_jacred_results(
+                                    alias, year, media_type
+                                )
+                                if alias_cache_hit:
+                                    print(
+                                        f"SOURCE CACHE HIT type={media_type} q={alias!r} count={len(alias_results)}",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+                                else:
+                                    print(
+                                        f"UPSTREAM OK type={media_type} q={alias!r} count={len(alias_results)}",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+
+                                # Keep only additional records tied to the same
+                                # canonical series; avoid injecting unrelated
+                                # releases returned by a broad Russian phrase.
+                                matching_alias_results = [
+                                    with_canonical_tv_title(item, canonical)
+                                    for item in alias_results
+                                    if item_mentions_tv_title(item, canonical)
+                                ]
+                                upstream_results = list(upstream_results) + matching_alias_results
+                                print(
+                                    f"TV ALIAS MERGE q={jac_query!r} alias={alias!r} "
+                                    f"source_results={len(alias_results)} "
+                                    f"matching_results={len(matching_alias_results)}",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
                     except Exception as exc:
                         errors.append((media_type, exc))
                         print(
@@ -1053,11 +1238,10 @@ class Handler(BaseHTTPRequestHandler):
 
                 unique, seen = [], set()
                 for item, media_type in results:
-                    key_value = clean(
-                        item.get("MagnetUri")
-                        or item.get("Details")
-                        or item.get("Title")
-                    ).casefold()
+                    key_value = (
+                        infohash_from_magnet(item.get("MagnetUri"))
+                        or clean(item.get("Details") or item.get("MagnetUri") or item.get("Title")).casefold()
+                    )
                     key = (media_type, key_value)
                     if not key_value or key in seen:
                         continue
