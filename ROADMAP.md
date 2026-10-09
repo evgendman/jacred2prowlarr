@@ -18,7 +18,7 @@ During validation, confirm:
 - a changed query, category, season/episode, year, limit, or offset still produces an independent response;
 - a failed/rate-limited JacRed request is not cached.
 
-## Implemented in v2.2.0 / v2.2.1 / v2.2.2
+## Implemented in v2.2.0–v2.2.3
 
 ### 1. Local response for Prowlarr test requests
 - Detect generic Torznab `t=search` requests without a real `q`.
@@ -31,8 +31,7 @@ During validation, confirm:
 - Use standard `application/x-bittorrent` for the torrent enclosure.
 
 ### 2. Cache identical recent requests
-- Add a 60-second in-memory response cache.
-- Keep up to 128 cached responses.
+- Add a configurable in-memory response cache (defaults: 180 seconds, 512 entries).
 - Include all query parameters that can affect the adapter response in the cache key.
 - Ignore only the API key, allowing identical searches from multiple clients to share a result.
 - Serialize concurrent identical requests with a per-key in-flight lock.
@@ -45,3 +44,13 @@ During validation, confirm:
 - Torznab `movie-search`, `tv-search`, and generic `search` implemented.
 - Quality detection priority: ffprobe → JacRed `info.quality` → source title.
 - Existing service remains the single adapter on `127.0.0.1:9128/torznab`.
+
+
+## Implemented in v2.2.3
+
+- Add one global upstream request limiter shared across all adapter threads (default minimum start interval: 1000 ms).
+- Honor JacRed `Retry-After` after HTTP 429; use a configurable fallback cooldown when the header is absent.
+- Fail fast with HTTP 503 and `Retry-After` if upstream queue wait would exceed the configured limit, rather than waiting into a likely Prowlarr timeout.
+- Make cooldown, pacing, and cache settings configurable through environment variables.
+- Keep partial results when one requested media-type branch succeeds and the other fails; never cache partial responses.
+- Parse RFC3339/RFC3339Nano source timestamps and never replace invalid dates with the current time.
