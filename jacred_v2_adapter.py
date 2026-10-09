@@ -43,6 +43,7 @@ INFLIGHT_LOCKS = {}
 
 # Global upstream limiter shared by all HTTP handler threads.
 RATE_LIMIT_LOCK = threading.Lock()
+UPSTREAM_REQUEST_LOCK = threading.Lock()
 LAST_UPSTREAM_START = 0.0
 UPSTREAM_BLOCK_UNTIL = 0.0
 
@@ -86,9 +87,8 @@ def register_upstream_backoff(seconds, reason):
     )
 
 
-def wait_for_upstream_slot():
+def wait_for_upstream_slot(deadline):
     global LAST_UPSTREAM_START
-    deadline = time.monotonic() + JACRED_MAX_QUEUE_WAIT_SECONDS
 
     while True:
         with RATE_LIMIT_LOCK:
@@ -103,7 +103,7 @@ def wait_for_upstream_slot():
                 return
 
             remaining_budget = deadline - now
-            if delay > remaining_budget:
+            if remaining_budget <= 0 or delay > remaining_budget:
                 retry_after = max(1, int(delay + 0.999))
                 raise UpstreamCoolingDown(
                     retry_after,
@@ -581,6 +581,8 @@ def item_matches_categories(item, requested, media_type):
 # ----------------------------------------------------------------
 
 def query_jacred(query, year, media_type):
+    global LAST_UPSTREAM_START
+
     params = {
         "q": query,
         "category": "movie_" if media_type == "movie" else "tv_",
@@ -597,18 +599,36 @@ def query_jacred(query, year, media_type):
         },
     )
 
-    # Reserve a global request slot immediately before touching jac.red.
-    wait_for_upstream_slot()
+    # Serialize all upstream calls, then pace starts relative to the previous
+    # call's completion. The wait budget includes time spent queued on this lock.
+    deadline = time.monotonic() + JACRED_MAX_QUEUE_WAIT_SECONDS
+    acquired = UPSTREAM_REQUEST_LOCK.acquire(
+        timeout=max(0.0, deadline - time.monotonic())
+    )
+    if not acquired:
+        raise UpstreamCoolingDown(
+            JACRED_MAX_QUEUE_WAIT_SECONDS,
+            "JacRed request queue is busy; maximum queue wait was reached",
+        )
+
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 429:
-            register_upstream_backoff(
-                parse_retry_after(exc),
-                "HTTP 429",
-            )
-        raise
+        wait_for_upstream_slot(deadline)
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                register_upstream_backoff(
+                    parse_retry_after(exc),
+                    "HTTP 429",
+                )
+            raise
+        finally:
+            with RATE_LIMIT_LOCK:
+                LAST_UPSTREAM_START = time.monotonic()
+    finally:
+        UPSTREAM_REQUEST_LOCK.release()
+
     return [x for x in (data.get("Results") or []) if isinstance(x, dict)]
 
 
