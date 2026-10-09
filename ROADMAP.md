@@ -68,3 +68,9 @@ During validation, confirm:
 - Generate local synthetic test results by Torznab request type and category: movie for Radarr, TV for Sonarr, and both for an unfiltered generic Prowlarr connectivity test.
 - Echo requested supported movie subcategories in the synthetic movie item and the Anime subcategory when explicitly requested for the TV test item.
 - Keep empty-query connectivity tests local; structured requests without a query return an empty feed, never a fabricated upstream search.
+
+
+## Implemented in v2.2.6
+
+- Add opt-in `JACRED_LOG_REQUEST_PARAMS=1` diagnostics to display sanitized request parameters and a short signature of the canonical cache key.
+- Credential-like query parameter names are excluded from diagnostic output; parameter logging is off by default.
