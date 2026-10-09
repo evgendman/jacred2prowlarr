@@ -4,7 +4,7 @@ JacRed v2 JSON → Torznab adapter for Prowlarr.
 
 ## Current version
 
-**2.2.6**
+**2.2.7**
 
 The adapter runs as the existing `jacred-v2-adapter.service` and listens on:
 
@@ -41,14 +41,11 @@ For temporary cache-miss troubleshooting, set `JACRED_LOG_REQUEST_PARAMS=1` in t
 
 ## Request cache
 
-Successful Torznab responses are cached in memory for **180 seconds**, with a maximum of **512** entries.
+Rendered Torznab responses are cached in memory for **180 seconds**, with a maximum of **512** entries. Their cache key includes parameters that affect the returned page, such as `offset`, `limit`, categories, and season/episode filters.
 
-The cache key covers the query parameters that affect the adapter response. The API key itself is ignored so identical searches from different clients can share one response.
+Raw JacRed results are cached separately for **180 seconds**, with a maximum of **128** source-result sets. Their cache key uses the inputs that affect the upstream response: query, year, and media type. Different Torznab pages (for example, `offset=0` and `offset=100`) and local category/season filtering can reuse the same upstream result set.
 
-Concurrent identical requests use the same in-flight cache key, preventing duplicate upstream JacRed requests.
-
-Failures and rate-limit responses are never cached as successful results.
-
+Concurrent identical requests are coalesced at both cache layers. Upstream failures and rate-limit responses are never cached.
 ## Quality
 
 Quality detection priority:
