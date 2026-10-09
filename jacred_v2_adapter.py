@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 
+import email.utils
 import html
 import json
+import os
 import re
 import sys
 import threading
 import time
 import traceback
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -15,10 +18,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.2"
+VERSION = "2.2.3"
 SERVER_TITLE = "JacRed TV + Movies"
-CACHE_TTL_SECONDS = 60
-CACHE_MAX_ENTRIES = 128
+CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
+CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
+JACRED_MIN_INTERVAL_MS = max(0, int(os.environ.get("JACRED_MIN_INTERVAL_MS", "1000")))
+JACRED_429_BACKOFF_SECONDS = max(1, int(os.environ.get("JACRED_429_BACKOFF_SECONDS", "60")))
+JACRED_MAX_QUEUE_WAIT_SECONDS = max(1, int(os.environ.get("JACRED_MAX_QUEUE_WAIT_SECONDS", "10")))
 JACRED_URL = "https://jac.red/api/v2.0/indexers/all/results"
 TORZNAB_NS = "http://torznab.com/schemas/2015/feed"
 
@@ -34,6 +40,78 @@ TEST_INFOHASH = "0000000000000000000000000000000000000001"
 CACHE_LOCK = threading.Lock()
 CACHE = {}
 INFLIGHT_LOCKS = {}
+
+# Global upstream limiter shared by all HTTP handler threads.
+RATE_LIMIT_LOCK = threading.Lock()
+LAST_UPSTREAM_START = 0.0
+UPSTREAM_BLOCK_UNTIL = 0.0
+
+
+class UpstreamCoolingDown(Exception):
+    def __init__(self, retry_after_seconds, message):
+        super().__init__(message)
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
+def parse_retry_after(exc):
+    headers = getattr(exc, "headers", None)
+    value = clean(headers.get("Retry-After", "") if headers else "")
+    if value:
+        try:
+            return max(1.0, float(value))
+        except ValueError:
+            try:
+                parsed = email.utils.parsedate_to_datetime(value)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return max(1.0, (parsed.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return float(JACRED_429_BACKOFF_SECONDS)
+
+
+def register_upstream_backoff(seconds, reason):
+    global UPSTREAM_BLOCK_UNTIL
+    seconds = max(1.0, float(seconds))
+    with RATE_LIMIT_LOCK:
+        UPSTREAM_BLOCK_UNTIL = max(
+            UPSTREAM_BLOCK_UNTIL,
+            time.monotonic() + seconds,
+        )
+        blocked_for = max(0.0, UPSTREAM_BLOCK_UNTIL - time.monotonic())
+    print(
+        f"JACRED BACKOFF seconds={blocked_for:.1f} reason={reason}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def wait_for_upstream_slot():
+    global LAST_UPSTREAM_START
+    deadline = time.monotonic() + JACRED_MAX_QUEUE_WAIT_SECONDS
+
+    while True:
+        with RATE_LIMIT_LOCK:
+            now = time.monotonic()
+            next_slot = max(
+                LAST_UPSTREAM_START + JACRED_MIN_INTERVAL_MS / 1000.0,
+                UPSTREAM_BLOCK_UNTIL,
+            )
+            delay = next_slot - now
+            if delay <= 0:
+                LAST_UPSTREAM_START = now
+                return
+
+            remaining_budget = deadline - now
+            if delay > remaining_budget:
+                retry_after = max(1, int(delay + 0.999))
+                raise UpstreamCoolingDown(
+                    retry_after,
+                    f"JacRed request deferred for {delay:.1f}s; "
+                    f"maximum queue wait is {JACRED_MAX_QUEUE_WAIT_SECONDS}s",
+                )
+
+        time.sleep(delay)
 
 
 def cache_key(params):
@@ -81,7 +159,7 @@ def cached_request(key, producer):
     with CACHE_LOCK:
         cached = CACHE.get(key)
         if cached and now - cached[0] < CACHE_TTL_SECONDS:
-            return cached[1][0], True
+            return cached[1], True
 
     lock = get_inflight_lock(key)
     with lock:
@@ -89,15 +167,15 @@ def cached_request(key, producer):
         with CACHE_LOCK:
             cached = CACHE.get(key)
             if cached and now - cached[0] < CACHE_TTL_SECONDS:
-                return cached[1][0], True
+                return cached[1], True
 
         # Do not cache producer exceptions (including JacRed 429/5xx).
         result, cacheable = producer()
 
-        now = time.monotonic()
         if cacheable:
+            now = time.monotonic()
             with CACHE_LOCK:
-                CACHE[key] = (now, (result, True))
+                CACHE[key] = (now, result)
                 prune_cache(now)
         return result, False
 
@@ -518,8 +596,19 @@ def query_jacred(query, year, media_type):
             "Accept": "application/json",
         },
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        data = json.loads(response.read().decode("utf-8"))
+
+    # Reserve a global request slot immediately before touching jac.red.
+    wait_for_upstream_slot()
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            register_upstream_backoff(
+                parse_retry_after(exc),
+                "HTTP 429",
+            )
+        raise
     return [x for x in (data.get("Results") or []) if isinstance(x, dict)]
 
 
@@ -832,6 +921,27 @@ class Handler(BaseHTTPRequestHandler):
                 xml,
                 "application/rss+xml; charset=utf-8",
             )
+        except UpstreamCoolingDown as exc:
+            body = str(exc).encode("utf-8", errors="replace")
+            self.send_response(503)
+            self.send_header("Retry-After", str(exc.retry_after_seconds))
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except urllib.error.HTTPError as exc:
+            body = str(exc).encode("utf-8", errors="replace")
+            status = 503 if exc.code == 429 else 502
+            self.send_response(status)
+            if exc.code == 429:
+                self.send_header(
+                    "Retry-After",
+                    str(max(1, int(parse_retry_after(exc) + 0.999))),
+                )
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         except Exception as exc:
             body = str(exc).encode("utf-8", errors="replace")
             self.send_response(500)
