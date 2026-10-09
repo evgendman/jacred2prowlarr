@@ -4,7 +4,7 @@ JacRed v2 JSON → Torznab adapter for Prowlarr.
 
 ## Current version
 
-**2.2.5**
+**2.2.6**
 
 The adapter runs as the existing `jacred-v2-adapter.service` and listens on:
 
@@ -33,6 +33,11 @@ The synthetic release includes a valid `pubDate` required by Prowlarr/Torznab cl
 JacRed source dates in RFC3339/RFC3339Nano form are parsed correctly; malformed dates never fall back to the current time.
 
 The adapter does **not** contact `jac.red` for this connectivity test, so repeated Prowlarr/Sonarr/Radarr tests do not consume JacRed requests.
+
+## Request diagnostics
+
+For temporary cache-miss troubleshooting, set `JACRED_LOG_REQUEST_PARAMS=1` in the service environment. The adapter then logs the query parameters and a short signature of the normalized cache key. Credential-like parameters (including API keys, tokens, and passwords) are redacted. The setting defaults to off.
+
 
 ## Request cache
 
