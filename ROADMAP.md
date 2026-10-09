@@ -48,7 +48,7 @@ During validation, confirm:
 
 ## Implemented in v2.2.3
 
-- Add one global upstream request limiter shared across all adapter threads (default minimum start interval: 1000 ms).
+- Serialize all upstream requests through one global limiter shared across all adapter threads (default quiet period after each completed request: 1000 ms).
 - Honor JacRed `Retry-After` after HTTP 429; use a configurable fallback cooldown when the header is absent.
 - Fail fast with HTTP 503 and `Retry-After` if upstream queue wait would exceed the configured limit, rather than waiting into a likely Prowlarr timeout.
 - Make cooldown, pacing, and cache settings configurable through environment variables.
