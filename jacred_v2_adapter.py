@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.8"
+VERSION = "2.2.9"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -565,15 +565,14 @@ def compact_title(value):
 
 def title_segment_head(value):
     value = clean(value)
-    value = re.split(r"[\\(\\[\\{]", value, maxsplit=1)[0]
-    value = re.sub(r"(?i)\\s+(?:19|20)\\d{2}(?:\\s*[-–—/]\\s*(?:19|20)?\\d{2})?.*$", "", value)
+    value = re.split(r"[\(\[\{]", value, maxsplit=1)[0]
+    value = re.sub(r"(?i)\s+(?:19|20)\d{2}(?:\s*[-–—/]\s*(?:19|20)?\d{2})?.*$", "", value)
     value = re.sub(
-        r"(?i)\\s+(?:2160p|1080p|720p|576p|480p|4k|HDRip|HDTV|WEB-DL|WEB-DLRip|WEBRip|BDRip|BRRip|BluRay|S\\d{1,3}\\b|\\d{1,3}\\s*(?:-?(?:й|ой|ый|ого|го))?\\s+сез\\w*).*$",
+        r"(?i)\s+(?:2160p|1080p|720p|576p|480p|4k|HDRip|HDTV|WEB-DL|WEB-DLRip|WEBRip|BDRip|BRRip|BluRay|S\d{1,3}\b|\d{1,3}\s*(?:-?(?:й|ой|ый|ого|го))?\s+сез\w*).*$",
         "",
         value,
     )
-    return value.strip(" \\t-–—|,:;")
-
+    return value.strip(" \t-–—|,:;")
 
 def find_russian_tv_alias(query, items):
     # Infer a Russian alias only when the queried name appears as one side of
@@ -603,7 +602,7 @@ def find_russian_tv_alias(query, items):
             continue
         seen_releases.add(identity)
 
-        segments = re.split(r"\\s+/\\s+", raw_title)
+        segments = re.split(r"\s+/\s+", raw_title)
         matching_indexes = []
         heads = [title_segment_head(segment) for segment in segments]
         for index, head in enumerate(heads):
@@ -657,7 +656,7 @@ def canonical_tv_title(items, fallback):
         if not value or re.search(r"[А-Яа-яЁё]", value):
             continue
         value = normalize_tv_original(value)
-        value = re.sub(r"(?i)\\s*[(\\[]?(?:19|20)\\d{2}.*$", "", value).strip()
+        value = re.sub(r"(?i)\s*[\(\[]?(?:19|20)\d{2}.*$", "", value).strip()
         key = compact_title(value)
         if not key:
             continue
@@ -668,7 +667,6 @@ def canonical_tv_title(items, fallback):
         best_key = max(votes, key=lambda key: (votes[key], len(names[key])))
         return names[best_key]
     return normalize_tv_original(fallback)
-
 
 def item_mentions_tv_title(item, canonical_title):
     target = compact_title(canonical_title)
