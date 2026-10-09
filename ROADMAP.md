@@ -82,3 +82,9 @@ During validation, confirm:
 - Allow multiple Torznab pages and locally filtered category/season searches to reuse one upstream result set.
 - Coalesce concurrent requests for the same source-result cache key; do not cache failed or rate-limited source calls.
 - Log `SOURCE CACHE HIT` distinctly from a final Torznab `CACHE HIT`.
+
+
+## Implemented in v2.2.10
+
+- Parse explicit multi-season collection ranges such as `1-11 сезоны` and `Seasons 1-11` as `S01-S11`, not as a single season.
+- Preserve the higher priority of explicit season/episode or multi-episode patterns.
