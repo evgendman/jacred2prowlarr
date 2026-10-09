@@ -4,7 +4,7 @@ JacRed v2 JSON → Torznab adapter for Prowlarr.
 
 ## Current version
 
-**2.2.7**
+**2.2.10**
 
 The adapter runs as the existing `jacred-v2-adapter.service` and listens on:
 
@@ -80,3 +80,8 @@ When a generic search needs both TV and Movies, an upstream failure in one media
 ## Upstream request pacing
 
 Every outgoing JacRed request is serialized through one process-wide limiter shared by all adapter threads. The configured interval is a minimum quiet period after the previous upstream response completes, preventing overlapping calls. Defaults: `JACRED_MIN_INTERVAL_MS=1000`, `JACRED_CACHE_TTL_SECONDS=180`, `JACRED_CACHE_MAX_ENTRIES=512`, `JACRED_429_BACKOFF_SECONDS=60`, and `JACRED_MAX_QUEUE_WAIT_SECONDS=10`. HTTP 429 triggers a global cooldown, honoring `Retry-After` when supplied. Requests that would wait longer than the queue-wait limit fail quickly with HTTP 503 and `Retry-After`, not by holding the connection until its timeout. These settings can be configured through systemd service environment overrides.
+
+
+## Multi-season release titles in v2.2.10
+
+When a source title explicitly identifies a range such as `1-11 сезоны` or `Seasons 1-11`, the adapter formats it as `S01-S11` rather than incorrectly treating it as a single season (for example, `S11`). Explicit episode/range patterns retain priority.
