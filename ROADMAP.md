@@ -54,3 +54,10 @@ During validation, confirm:
 - Make cooldown, pacing, and cache settings configurable through environment variables.
 - Keep partial results when one requested media-type branch succeeds and the other fails; never cache partial responses.
 - Parse RFC3339/RFC3339Nano source timestamps and never replace invalid dates with the current time.
+
+
+## Implemented in v2.2.4
+
+- Treat a category-only generic Prowlarr test as a local connectivity test; category filters alone no longer bypass the synthetic response.
+- Remove the invented `the gentlemen` fallback query.
+- Return an empty feed for other requests without `q`, so no empty or synthetic query reaches JacRed.
