@@ -74,3 +74,11 @@ During validation, confirm:
 
 - Add opt-in `JACRED_LOG_REQUEST_PARAMS=1` diagnostics to display sanitized request parameters and a short signature of the canonical cache key.
 - Credential-like query parameter names are excluded from diagnostic output; parameter logging is off by default.
+
+
+## Implemented in v2.2.7
+
+- Add a separate in-memory cache for raw JacRed result sets, keyed by exact source query, year, and media type.
+- Allow multiple Torznab pages and locally filtered category/season searches to reuse one upstream result set.
+- Coalesce concurrent requests for the same source-result cache key; do not cache failed or rate-limited source calls.
+- Log `SOURCE CACHE HIT` distinctly from a final Torznab `CACHE HIT`.
