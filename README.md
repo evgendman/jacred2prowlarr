@@ -4,7 +4,7 @@ JacRed v2 JSON → Torznab adapter for Prowlarr.
 
 ## Current version
 
-**2.2.3**
+**2.2.4**
 
 The adapter runs as the existing `jacred-v2-adapter.service` and listens on:
 
@@ -24,7 +24,9 @@ Recommended Prowlarr indexer name:
 
 ## Prowlarr test protection
 
-A generic Torznab `t=search` request without a real `q` is answered locally with a synthetic test release.
+A generic Torznab `t=search` request without a real `q` and without season, episode, year, or title-ID search terms is answered locally with a synthetic test release. A category filter alone does not turn this connectivity test into a real search.
+
+Any other request with an empty `q` returns an empty feed; the adapter never substitutes a made-up title or forwards an empty query to JacRed.
 
 The synthetic release includes a valid `pubDate` required by Prowlarr/Torznab clients.
 
