@@ -4,7 +4,7 @@ JacRed v2 JSON → Torznab adapter for Prowlarr.
 
 ## Current version
 
-**2.2.2**
+**2.2.3**
 
 The adapter runs as the existing `jacred-v2-adapter.service` and listens on:
 
@@ -34,7 +34,7 @@ The adapter does **not** contact `jac.red` for this connectivity test, so repeat
 
 ## Request cache
 
-Successful Torznab responses are cached in memory for **60 seconds**, with a maximum of **128** entries.
+Successful Torznab responses are cached in memory for **180 seconds**, with a maximum of **512** entries.
 
 The cache key covers the query parameters that affect the adapter response. The API key itself is ignored so identical searches from different clients can share one response.
 
@@ -71,3 +71,8 @@ See [ROADMAP.md](ROADMAP.md) for the project history and remaining validation wo
 ## Upstream error handling
 
 When a generic search needs both TV and Movies, an upstream failure in one media type no longer discards successful results from the other type. Partial responses are not cached.
+
+
+## Upstream request pacing
+
+Every outgoing JacRed request uses a single process-wide limiter shared by all adapter threads. Defaults: `JACRED_MIN_INTERVAL_MS=1000`, `JACRED_CACHE_TTL_SECONDS=180`, `JACRED_CACHE_MAX_ENTRIES=512`, `JACRED_429_BACKOFF_SECONDS=60`, and `JACRED_MAX_QUEUE_WAIT_SECONDS=10`. HTTP 429 triggers a global cooldown, honoring `Retry-After` when supplied. Requests that would wait longer than the queue-wait limit fail quickly with HTTP 503 and `Retry-After`, not by holding the connection until its timeout. These settings can be configured through systemd service environment overrides.
