@@ -19,10 +19,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.6"
+VERSION = "2.2.7"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
+JACRED_SOURCE_CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_SOURCE_CACHE_TTL_SECONDS", "180")))
+JACRED_SOURCE_CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_SOURCE_CACHE_MAX_ENTRIES", "128")))
 JACRED_MIN_INTERVAL_MS = max(0, int(os.environ.get("JACRED_MIN_INTERVAL_MS", "1000")))
 JACRED_429_BACKOFF_SECONDS = max(1, int(os.environ.get("JACRED_429_BACKOFF_SECONDS", "60")))
 JACRED_MAX_QUEUE_WAIT_SECONDS = max(1, int(os.environ.get("JACRED_MAX_QUEUE_WAIT_SECONDS", "10")))
@@ -43,6 +45,12 @@ TEST_TV_INFOHASH = "0000000000000000000000000000000000000002"
 CACHE_LOCK = threading.Lock()
 CACHE = {}
 INFLIGHT_LOCKS = {}
+
+# Cache raw JacRed result sets independently of rendered Torznab pages.
+# Different offsets/category/season filters can reuse the same source results.
+SOURCE_CACHE_LOCK = threading.Lock()
+SOURCE_CACHE = {}
+SOURCE_INFLIGHT_LOCKS = {}
 
 # Global upstream limiter shared by all HTTP handler threads.
 RATE_LIMIT_LOCK = threading.Lock()
@@ -209,6 +217,61 @@ def cached_request(key, producer):
                 CACHE[key] = (now, result)
                 prune_cache(now)
         return result, False
+
+
+
+def get_source_inflight_lock(key):
+    with SOURCE_CACHE_LOCK:
+        lock = SOURCE_INFLIGHT_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            SOURCE_INFLIGHT_LOCKS[key] = lock
+        return lock
+
+
+def prune_source_cache(now):
+    expired = [
+        key
+        for key, (created, _) in SOURCE_CACHE.items()
+        if now - created >= JACRED_SOURCE_CACHE_TTL_SECONDS
+    ]
+    for key in expired:
+        SOURCE_CACHE.pop(key, None)
+
+    if len(SOURCE_CACHE) <= JACRED_SOURCE_CACHE_MAX_ENTRIES:
+        return
+
+    oldest = sorted(SOURCE_CACHE.items(), key=lambda entry: entry[1][0])
+    for key, _ in oldest[: len(SOURCE_CACHE) - JACRED_SOURCE_CACHE_MAX_ENTRIES]:
+        SOURCE_CACHE.pop(key, None)
+
+
+def cached_jacred_results(query, year, media_type):
+    # These are exactly the varying inputs sent to JacRed. Torznab offset,
+    # limit, category filtering, and season/episode filtering are handled
+    # locally and therefore do not belong in this cache key.
+    key = (query, year, media_type)
+    now = time.monotonic()
+    with SOURCE_CACHE_LOCK:
+        cached = SOURCE_CACHE.get(key)
+        if cached and now - cached[0] < JACRED_SOURCE_CACHE_TTL_SECONDS:
+            return cached[1], True
+
+    lock = get_source_inflight_lock(key)
+    with lock:
+        now = time.monotonic()
+        with SOURCE_CACHE_LOCK:
+            cached = SOURCE_CACHE.get(key)
+            if cached and now - cached[0] < JACRED_SOURCE_CACHE_TTL_SECONDS:
+                return cached[1], True
+
+        # Exceptions propagate and are deliberately not cached.
+        results = query_jacred(query, year, media_type)
+        now = time.monotonic()
+        with SOURCE_CACHE_LOCK:
+            SOURCE_CACHE[key] = (now, results)
+            prune_source_cache(now)
+        return results, False
 
 
 def clean(value):
@@ -952,12 +1015,21 @@ class Handler(BaseHTTPRequestHandler):
 
                 for media_type in sorted(media_types):
                     try:
-                        upstream_results = query_jacred(jac_query, year, media_type)
-                        print(
-                            f"UPSTREAM OK type={media_type} q={jac_query!r} count={len(upstream_results)}",
-                            file=sys.stderr,
-                            flush=True,
+                        upstream_results, source_cache_hit = cached_jacred_results(
+                            jac_query, year, media_type
                         )
+                        if source_cache_hit:
+                            print(
+                                f"SOURCE CACHE HIT type={media_type} q={jac_query!r} count={len(upstream_results)}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                        else:
+                            print(
+                                f"UPSTREAM OK type={media_type} q={jac_query!r} count={len(upstream_results)}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
                     except Exception as exc:
                         errors.append((media_type, exc))
                         print(
