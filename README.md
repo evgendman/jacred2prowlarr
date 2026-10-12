@@ -184,6 +184,8 @@ All outbound JacRed requests share one process-wide limiter:
 - if a request would have to wait longer than the configured queue budget, the adapter fails fast with HTTP 503 and `Retry-After`, instead of holding the client connection until it times out;
 - a successful TV or movie branch is preserved if the other branch of a generic search fails, while partial responses are not cached.
 
+User-Agent observations and the planned next-version compatibility change are documented in [docs/user-agent.md](docs/user-agent.md). The default change must not be used to probe an active 403 restriction.
+
 Default environment settings:
 
 | Variable | Default | Purpose |
