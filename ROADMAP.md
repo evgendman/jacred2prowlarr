@@ -10,6 +10,14 @@ Provide one local Torznab endpoint for Prowlarr that converts JacRed v2 JSON res
 
 This is a metadata/search adapter: the final automatic release decision remains the responsibility of Sonarr/Radarr Quality Profiles and Custom Formats.
 
+## JacRed API versions and endpoint inventory
+
+- The public `https://jac.red/version` endpoint reported **3.15.0**, Git SHA `f43eeba8`, build date `2026-09-18 14:08:55 UTC`, on 2026-10-12. The matching route inventory is documented in [docs/jacred-api-endpoints.md](docs/jacred-api-endpoints.md) and [the Russian version](docs/jacred-api-endpoints.ru.md).
+- The adapter's production upstream remains `https://jac.red/api/v2.0/indexers/all/results`.
+- Planned local integration-test target: upstream release/tag [`3.18.0-oss`](https://github.com/jacred-fdb/jacred/releases/tag/3.18.0-oss), using the locally deployed instance documented in [evgendman/jacred-sync-node](https://github.com/evgendman/jacred-sync-node).
+- Before tests, capture the local instance's actual `/version` response. Do not mark compatibility with `3.18.0-oss` as verified unless that exact version is running and the tests have passed. Record schema/behavior differences from the public `3.15.0` baseline.
+- Keep route inventory and live reachability separate: success at `/`, `/version` or Torznab `caps` does not establish that the adapter's JSON search route is accessible.
+
 ## Upstream access incident (2026-10-12)
 
 On 2026-10-12, diagnostic requests to the JacRed v2 JSON endpoint and the root `https://jac.red/` returned `HTTP 403 Forbidden` with an `nginx/1.24.0 (Ubuntu)` response; neither response included `Retry-After` or a stated expiry time. This did not establish the reason or duration of the restriction.
