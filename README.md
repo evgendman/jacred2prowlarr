@@ -45,6 +45,10 @@ JacRed v2 JSON API (jac.red)
 
 Prowlarr sees the adapter as a Torznab indexer. The adapter listens on localhost and queries JacRed **only when it receives a real search request**; it does not poll the source in the background. One running adapter can serve Prowlarr searches originating from multiple Sonarr/Radarr instances, including separate 1080p and 4K instances, sharing in-memory caches and the same upstream request limiter.
 
+## JacRed API compatibility and test target
+
+The public `jac.red` instance reported version **3.15.0** (`f43eeba8`, built 2026-09-18) on 2026-10-12. The planned local integration-test target is upstream **3.18.0-oss**, using the local instance documented in [jacred-sync-node](https://github.com/evgendman/jacred-sync-node). The runtime version must be confirmed through `/version` before tests are reported as complete. See the endpoint inventory and version notes in [docs/jacred-api-endpoints.md](docs/jacred-api-endpoints.md); the Russian reference is [docs/jacred-api-endpoints.ru.md](docs/jacred-api-endpoints.ru.md).
+
 ## What the adapter returns
 
 ### Separate movie and TV formatting
