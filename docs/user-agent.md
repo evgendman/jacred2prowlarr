@@ -25,9 +25,18 @@ The difference was also observed when the request was pinned to a specific Cloud
 
 This is evidence that request headers — in particular User-Agent — were relevant to the outcome for this endpoint and those tests. It is not proof that User-Agent was the only variable involved or that every 403 from any JacRed endpoint has the same cause.
 
-### Public JacRed API
+### Public JacRed root and API
 
-A request to https://jac.red/torznab/api?t=caps with a Chrome 155 User-Agent returned HTTP 200 during testing. Separate requests to https://jac.red/ and a v2 JSON endpoint had returned HTTP 403 at another point in the investigation. These are different endpoints and observations; they must not be collapsed into a claim that one header universally fixes access.
+A request to https://jac.red/torznab/api?t=caps with a Chrome 155 User-Agent returned HTTP 200 during testing.
+
+A separate request to the root https://jac.red/ had earlier returned HTTP 403 with an nginx/1.24.0 (Ubuntu) response. On 12 October 2026, a single controlled request from the mini-PC to that root URL using the exact Chrome 111 User-Agent shown below returned:
+
+    HTTP=200 remote_ip=144.31.3.10 time=0.157375s
+    Server: nginx/1.24.0 (Ubuntu)
+
+The response body was the JacRed HTML page. This confirms that the root was reachable from the mini-PC under that tested request. Together with the successful Torznab capabilities request, this makes a blanket IP-level block of the whole domain less likely.
+
+The adapter's v2 JSON search endpoint had separately returned HTTP 403 earlier. A successful root page or Torznab capabilities request does not by itself prove that the v2 JSON endpoint is currently working. Keep endpoint-specific results separate, and do not claim that User-Agent alone caused every observed 403: time, path-specific rules, other headers, and server/security configuration may also matter.
 
 ### What the upstream JacRed client uses
 
