@@ -14,6 +14,8 @@ This is a metadata/search adapter: the final automatic release decision remains 
 
 On 2026-10-12, one diagnostic request to the JacRed v2 API and one request to `https://jac.red/` both returned `HTTP 403 Forbidden`. Both responses were the default-looking HTML error page from `nginx/1.24.0 (Ubuntu)`; neither included `Retry-After` or a stated expiry time. The reason and duration of the restriction therefore remain unknown. These responses do not prove that the restriction is permanent, IP-based, or caused by the adapter's User-Agent.
 
+      Separate tests found that User-Agent affected the response from `https://sync.jacred.stream/sync/conf`: a request without an explicit browser-style value returned a Cloudflare 403, while requests using explicit Chrome User-Agent values returned HTTP 200. A request to `https://jac.red/torznab/api?t=caps` with a Chrome 155 User-Agent also returned HTTP 200 in a separate test. These observations concern different endpoints and do not establish that User-Agent explains every 403. Details and the next-version compatibility decision are in [docs/user-agent.md](docs/user-agent.md).
+
 Until recovery is explicitly confirmed, treat upstream access as blocked. Do not run repeated live probes, rotate request headers, or use public JacRed as a test fixture for failure scenarios. Test protection logic against a local mock upstream. A live recovery check must be a single controlled attempt after the configured protection period.
 
 ## Confirmed validation
@@ -113,12 +115,13 @@ After an eligible HALF_OPEN probe succeeds, pace subsequent upstream requests us
 
 Advance one step only after **three consecutive successful upstream requests** at the current step. A new 429 returns the circuit to OPEN and increases the failure stage; a new 403 follows the stricter 403 policy. The normal 5-second floor remains in force. Make the recovery steps and success count configurable.
 
-### 7. User-Agent
+### 7. User-Agent compatibility
 
-- Use a stable, modern browser-like User-Agent that does not disclose the adapter's project name or version.
-- Keep the User-Agent consistent across requests; do not randomly rotate it or switch profiles in response to errors.
-- Keep the setting configurable (for example, `JACRED_USER_AGENT`) and document the selected profile.
-- A browser-like User-Agent is not a guarantee against blocking and does not replace pacing, caching, or the circuit breaker. Do not experiment with headers to bypass an active 403 restriction.
+- Adapter v2.2.10 currently sends the project-specific value `JacRed-V2-Torznab-Adapter/{VERSION}`.
+- In the next adapter version, replace this default with a stable value aligned with the User-Agent used by the upstream JacRed HTTP client. In the upstream source inspected on 2026-10-12, `Infrastructure/Networking/HttpClient.cs` used `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36`. Recheck the then-current upstream source before implementation; this is a compatibility reference, not a permanent API contract.
+- If configurable, expose it as `JACRED_USER_AGENT`, document the fixed default, and keep the value stable across all upstream requests.
+- Add a local-mock test confirming that the selected User-Agent is sent consistently. Do not rotate values randomly or change the header in reaction to each error.
+- The observed responses do not prove that User-Agent alone caused or resolves all 403 responses. Do not use this change to probe repeatedly or bypass an active 403 restriction. Keep the existing cooldown and single controlled recovery-check policy; see [docs/user-agent.md](docs/user-agent.md).
 
 ### 8. Diagnostics and safe logging
 
