@@ -12,11 +12,13 @@ This is a metadata/search adapter: the final automatic release decision remains 
 
 ## Upstream access incident (2026-10-12)
 
-On 2026-10-12, one diagnostic request to the JacRed v2 API and one request to `https://jac.red/` both returned `HTTP 403 Forbidden`. Both responses were the default-looking HTML error page from `nginx/1.24.0 (Ubuntu)`; neither included `Retry-After` or a stated expiry time. The reason and duration of the restriction therefore remain unknown. These responses do not prove that the restriction is permanent, IP-based, or caused by the adapter's User-Agent.
+On 2026-10-12, diagnostic requests to the JacRed v2 JSON endpoint and the root `https://jac.red/` returned `HTTP 403 Forbidden` with an `nginx/1.24.0 (Ubuntu)` response; neither response included `Retry-After` or a stated expiry time. This did not establish the reason or duration of the restriction.
 
-      Separate tests found that User-Agent affected the response from `https://sync.jacred.stream/sync/conf`: a request without an explicit browser-style value returned a Cloudflare 403, while requests using explicit Chrome User-Agent values returned HTTP 200. A request to `https://jac.red/torznab/api?t=caps` with a Chrome 155 User-Agent also returned HTTP 200 in a separate test. These observations concern different endpoints and do not establish that User-Agent explains every 403. Details and the next-version compatibility decision are in [docs/user-agent.md](docs/user-agent.md).
+Follow-up tests showed that a request to `https://jac.red/torznab/api?t=caps` using a Chrome 155 User-Agent returned HTTP 200. Later on 2026-10-12, one controlled request from the mini-PC to `https://jac.red/` with the Chrome 111 User-Agent used by the upstream JacRed HTTP client returned `HTTP 200 OK`, from `144.31.3.10`, with `Server: nginx/1.24.0 (Ubuntu)`. This confirms that the root page was reachable under that tested request and makes a blanket IP-level block of the entire domain less likely.
 
-Until recovery is explicitly confirmed, treat upstream access as blocked. Do not run repeated live probes, rotate request headers, or use public JacRed as a test fixture for failure scenarios. Test protection logic against a local mock upstream. A live recovery check must be a single controlled attempt after the configured protection period.
+Separate tests on `https://sync.jacred.stream/sync/conf` also found HTTP 403 without an explicit browser-style User-Agent and HTTP 200 with Chrome User-Agent values. Taken together, these observations support a hypothesis that request headers or endpoint-specific security handling affect the outcome. They do not prove that User-Agent is the sole cause, and the successful root/Torznab requests do not establish recovery of the adapter's v2 JSON search endpoint.
+
+Do not treat the entire domain as proven blocked or as fully recovered: endpoint-level reachability is mixed. Avoid repeated live probes and do not rotate headers to bypass an active restriction. Test protection logic against a local mock upstream. The successful root check is recorded in [docs/user-agent.md](docs/user-agent.md); any further recovery attempt for the actual v2 search endpoint should follow the controlled recovery policy.
 
 ## Confirmed validation
 
