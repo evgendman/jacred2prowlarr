@@ -4,7 +4,7 @@
 
 **JacRed v2 JSON → Torznab adapter for Prowlarr, Sonarr and Radarr.**
 
-Current version: **2.3.0**
+Current version: **2.3.1 (candidate)**
 
 The adapter turns JacRed's Russian-tracker release data into consistent Torznab results that the *Arr applications can parse and rank more reliably. It is intended to bridge two gaps: Russian release titles do not always follow the naming patterns expected by Sonarr/Radarr, and a direct indexer connectivity test may fail when the upstream returns no real result for an empty search.
 
@@ -186,7 +186,7 @@ By default the adapter queries the local JacRed JSON endpoint:
 
 Set `JACRED_URL` to use any compatible JacRed v2 instance; the adapter is not hard-wired to the local node. See [jacred-sync-node](https://github.com/evgendman/jacred-sync-node) for the local deployment.
 
-- Outbound calls are strictly serialized. The quiet interval is measured from completion of the previous upstream attempt and defaults to **5000 ms**; values below 5000 are clamped to the 5000 ms floor.
+- Outbound calls are strictly serialized. The quiet interval is measured from completion of the previous upstream attempt and defaults to **1000 ms**; values below 1000 are clamped to the 1000 ms floor.
 - If an upstream slot cannot be granted within `JACRED_MAX_QUEUE_WAIT_SECONDS`, the adapter returns local HTTP 503 with `Retry-After` and does not start the request.
 - HTTP 429 opens a shared circuit breaker with escalating delays of 60 seconds, 5 minutes, 15 minutes, 1 hour and 6 hours. The longer of the internal delay and source `Retry-After` is respected.
 - The first HTTP 403 opens a 24-hour safety block. If the one controlled probe after that block returns 403 again, the adapter blocks for seven days and requires manual review; it will not probe automatically after the seven-day period.
@@ -201,7 +201,7 @@ Set `JACRED_URL` to use any compatible JacRed v2 instance; the adapter is not ha
 |---|---|---|
 | `JACRED_URL` | `http://127.0.0.1:9117/api/v2.0/indexers/all/results` | JacRed v2 JSON endpoint |
 | `JACRED_USER_AGENT` | Stable Chrome 111 UA | Fixed User-Agent for upstream requests |
-| `JACRED_MIN_INTERVAL_MS` | `5000` | Minimum quiet interval; values below this are clamped |
+| `JACRED_MIN_INTERVAL_MS` | `1000` | Minimum quiet interval; values below this are clamped to 1000 ms |
 | `JACRED_MAX_QUEUE_WAIT_SECONDS` | `10` | Maximum wait for a request slot |
 | `JACRED_STATE_PATH` | `/var/lib/jacred-v2-adapter/upstream_state.sqlite3` | Persistent SQLite protection state |
 | `JACRED_429_BACKOFF_SECONDS` | `60` | Legacy-compatible fallback for absent/invalid Retry-After |
