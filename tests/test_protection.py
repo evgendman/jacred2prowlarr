@@ -102,7 +102,7 @@ class ProtectionTests(unittest.TestCase):
 
     def test_local_default_and_interval_floor_are_configured(self):
         self.assertEqual(adapter.MIN_UPSTREAM_INTERVAL_FLOOR_MS, 1000)
-        self.assertEqual(adapter.JACRED_MIN_INTERVAL_MS, 1000)
+        self.assertEqual(self.interval, 1000)
         self.assertIn("/api/v2.0/indexers/all/results", adapter.JACRED_URL)
 
     def test_user_agent_and_v2_query_shape(self):
