@@ -400,10 +400,28 @@ def register_other_failure(reason, probe=False):
 def register_upstream_success(probe=False):
     state = read_protection_state()
     was_probe = bool(probe or state["state"] == "HALF_OPEN")
-    recovery_stage = 0 if was_probe else int(state["recovery_stage"])
-    recovery_successes = 0 if was_probe else int(state["recovery_successes"]) + 1
-    if recovery_successes >= JACRED_RECOVERY_SUCCESS_COUNT:
-        recovery_stage = min(recovery_stage + 1, len(JACRED_RECOVERY_INTERVALS_SECONDS) - 1)
+    recovering = bool(
+        was_probe
+        or int(state["consecutive_429"])
+        or int(state["consecutive_403"])
+        or str(state["failure_reason"]).startswith("HALF_OPEN probe failed:")
+        or int(state["recovery_stage"])
+        or int(state["recovery_successes"])
+    )
+
+    if was_probe:
+        recovery_stage = 0
+        recovery_successes = 0
+    elif recovering:
+        recovery_stage = int(state["recovery_stage"])
+        recovery_successes = int(state["recovery_successes"]) + 1
+        if recovery_successes >= JACRED_RECOVERY_SUCCESS_COUNT:
+            recovery_stage = min(recovery_stage + 1, len(JACRED_RECOVERY_INTERVALS_SECONDS) - 1)
+            recovery_successes = 0
+    else:
+        # Ordinary successful requests in CLOSED do not count as recovery
+        # progress and must not activate the 60-second recovery interval.
+        recovery_stage = 0
         recovery_successes = 0
 
     stable_successes = int(state["stable_successes"]) + 1
@@ -430,7 +448,7 @@ def register_upstream_success(probe=False):
             file=sys.stderr,
             flush=True,
         )
-    elif recovery_stage != int(state["recovery_stage"]):
+    elif recovering and recovery_stage != int(state["recovery_stage"]):
         print(
             f"INFO gradual recovery advanced stage={recovery_stage + 1}/"
             f"{len(JACRED_RECOVERY_INTERVALS_SECONDS)} "
@@ -448,6 +466,7 @@ def register_upstream_success(probe=False):
             flush=True,
         )
     return updated
+
 
 
 def begin_upstream_attempt():
