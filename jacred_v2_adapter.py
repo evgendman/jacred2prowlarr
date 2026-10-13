@@ -488,8 +488,23 @@ def begin_upstream_attempt():
 def wait_for_upstream_slot(deadline):
     global LAST_UPSTREAM_COMPLETION
 
-    # The queue deadline is checked before any circuit transition. A request
-    # that cannot acquire the global lock must not consume the single probe.
+    while True:
+        with RATE_LIMIT_LOCK:
+            now = time.monotonic()
+            delay = LAST_UPSTREAM_COMPLETION + JACRED_MIN_INTERVAL_MS / 1000.0 - now
+            if delay <= 0:
+                break
+            remaining_budget = deadline - now
+            if remaining_budget <= 0 or delay > remaining_budget:
+                raise UpstreamCoolingDown(
+                    max(1, math.ceil(delay)),
+                    f"JacRed request deferred for {delay:.1f}s; "
+                    f"maximum queue wait is {JACRED_MAX_QUEUE_WAIT_SECONDS}s",
+                )
+        time.sleep(delay)
+
+    # Acquire HALF_OPEN only after the serialized queue slot is available.
+    # This prevents a busy queue from consuming the one allowed recovery probe.
     probe = begin_upstream_attempt()
     if probe:
         interval_seconds = JACRED_MIN_INTERVAL_MS / 1000.0
@@ -504,21 +519,24 @@ def wait_for_upstream_slot(deadline):
             float(JACRED_RECOVERY_INTERVALS_SECONDS[stage]),
         )
 
-    while True:
-        with RATE_LIMIT_LOCK:
-            now = time.monotonic()
-            next_slot = LAST_UPSTREAM_COMPLETION + interval_seconds
-            delay = next_slot - now
-            if delay <= 0:
-                return probe
+    with RATE_LIMIT_LOCK:
+        now = time.monotonic()
+        delay = LAST_UPSTREAM_COMPLETION + interval_seconds - now
+        if delay > 0:
             remaining_budget = deadline - now
             if remaining_budget <= 0 or delay > remaining_budget:
+                if probe:
+                    update_protection_state(
+                        state="OPEN",
+                        block_until=time.time() + JACRED_PROBE_FAILURE_SECONDS,
+                        failure_reason="Recovery probe could not obtain a queue slot",
+                    )
                 raise UpstreamCoolingDown(
                     max(1, math.ceil(delay)),
                     f"JacRed request deferred for {delay:.1f}s; "
                     f"maximum queue wait is {JACRED_MAX_QUEUE_WAIT_SECONDS}s",
                 )
-        time.sleep(delay)
+    return probe
 
 
 def log_request_diagnostics(params, key):
