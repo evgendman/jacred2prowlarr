@@ -488,6 +488,8 @@ def begin_upstream_attempt():
 def wait_for_upstream_slot(deadline):
     global LAST_UPSTREAM_COMPLETION
 
+    # The queue deadline is checked before any circuit transition. A request
+    # that cannot acquire the global lock must not consume the single probe.
     probe = begin_upstream_attempt()
     if probe:
         interval_seconds = JACRED_MIN_INTERVAL_MS / 1000.0
