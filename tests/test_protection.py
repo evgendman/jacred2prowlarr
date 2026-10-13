@@ -55,7 +55,7 @@ class ProtectionTests(unittest.TestCase):
         self.ua = adapter.JACRED_USER_AGENT
         adapter.JACRED_STATE_PATH = os.path.join(self.temp.name, "state.sqlite3")
         adapter.JACRED_URL = "http://127.0.0.1:9/api/v2.0/indexers/all/results"
-        adapter.JACRED_MIN_INTERVAL_MS = 5000
+        adapter.JACRED_MIN_INTERVAL_MS = 1000
         adapter.JACRED_USER_AGENT = "Mock-Adapter-Test"
         adapter.LAST_UPSTREAM_COMPLETION = 0
         adapter.reset_protection_state()
@@ -101,7 +101,8 @@ class ProtectionTests(unittest.TestCase):
         return f"http://127.0.0.1:{self.adapter_server.server_port}"
 
     def test_local_default_and_interval_floor_are_configured(self):
-        self.assertGreaterEqual(adapter.JACRED_MIN_INTERVAL_MS, 5000)
+        self.assertEqual(adapter.MIN_UPSTREAM_INTERVAL_FLOOR_MS, 1000)
+        self.assertEqual(adapter.JACRED_MIN_INTERVAL_MS, 1000)
         self.assertIn("/api/v2.0/indexers/all/results", adapter.JACRED_URL)
 
     def test_user_agent_and_v2_query_shape(self):
@@ -286,7 +287,7 @@ class ProtectionTests(unittest.TestCase):
 
     def test_two_simultaneous_queries_are_serialized(self):
         # Speed up only this unit test; deployment configuration is separately
-        # required to enforce the 5000 ms minimum.
+        # deployment normally enforces the 1000 ms minimum; this test overrides the value directly for speed.
         adapter.JACRED_MIN_INTERVAL_MS = 25
         adapter.LAST_UPSTREAM_COMPLETION = time.monotonic() - 10
         errors = []
