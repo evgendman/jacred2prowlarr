@@ -167,7 +167,9 @@ class ProtectionTests(unittest.TestCase):
         self.assertEqual(state["consecutive_429"], 0)
 
     def test_two_simultaneous_queries_are_serialized(self):
-        adapter.JACRED_MIN_INTERVAL_MS = 5000
+        # Speed up only this unit test; deployment configuration is separately
+        # required to enforce the 5000 ms minimum.
+        adapter.JACRED_MIN_INTERVAL_MS = 25
         adapter.LAST_UPSTREAM_COMPLETION = time.monotonic() - 10
         errors = []
         def call(query):
