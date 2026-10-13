@@ -517,8 +517,9 @@ def wait_for_upstream_slot(deadline):
                 )
         time.sleep(delay)
 
-    # Acquire HALF_OPEN only after the serialized queue slot is available.
-    # This prevents a busy queue from consuming the one allowed recovery probe.
+    # A probe is claimed atomically only after the upstream lock and quiet
+    # interval are available. This prevents concurrent clients from consuming
+    # multiple probes or bypassing a newly opened circuit.
     probe = begin_upstream_attempt()
     if probe:
         interval_seconds = JACRED_MIN_INTERVAL_MS / 1000.0
@@ -539,7 +540,6 @@ def wait_for_upstream_slot(deadline):
                     max(1, math.ceil(remaining)) if remaining > 0 else 86400,
                     "JacRed upstream circuit OPEN; no upstream request was started",
                 )
-
     with RATE_LIMIT_LOCK:
         now = time.monotonic()
         delay = LAST_UPSTREAM_COMPLETION + interval_seconds - now
