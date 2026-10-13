@@ -2,7 +2,7 @@
 
 [English documentation](README.md) | [Документация на русском](README.ru.md)
 
-Current adapter version: **2.2.10**
+Repository candidate version: **2.3.1**; last deployed and verified version on MINI-Ubuntu: **2.3.0** (2026-10-13)
 
 ## Project goal
 
@@ -13,7 +13,7 @@ This is a metadata/search adapter: the final automatic release decision remains 
 ## JacRed API versions and endpoint inventory
 
 - The public `https://jac.red/version` endpoint reported **3.15.0**, Git SHA `f43eeba8`, build date `2026-09-18 14:08:55 UTC`, on 2026-10-12. The matching route inventory is documented in [docs/jacred-api-endpoints.md](docs/jacred-api-endpoints.md) and [the Russian version](docs/jacred-api-endpoints.ru.md).
-- The adapter's production upstream remains `https://jac.red/api/v2.0/indexers/all/results`.
+- The adapter's configured default upstream is local: `http://127.0.0.1:9117/api/v2.0/indexers/all/results`. The public endpoint remains historical incident context, not the configured production source.
 - Planned local integration-test target: upstream release/tag [`3.18.0-oss`](https://github.com/jacred-fdb/jacred/releases/tag/3.18.0-oss), using the locally deployed instance documented in [evgendman/jacred-sync-node](https://github.com/evgendman/jacred-sync-node).
 - Before tests, capture the local instance's actual `/version` response. Do not mark compatibility with `3.18.0-oss` as verified unless that exact version is running and the tests have passed. Record schema/behavior differences from the public `3.15.0` baseline.
 - Keep route inventory and live reachability separate: success at `/`, `/version` or Torznab `caps` does not establish that the adapter's JSON search route is accessible.
@@ -56,10 +56,10 @@ These checks confirm the listed scenarios; they do not substitute for validation
 
 ## v2.3.0: local source and persistent upstream protection
 
-**Implementation status as of 2026-10-13:** GitHub Actions run #11 passed Python compilation and all 17 mock-upstream tests on branch `v2.3.0-ci-validation`. This validates the covered test cases, but does not yet constitute complete production verification.
+**v2.3.0 baseline validation as of 2026-10-13:** GitHub Actions run #12 passed Python compilation and all 17 mock-upstream tests on commit `025a0a57911cb5bd06d8c1c85a7c3425be8e5b79`. This validation applies to the 2.3.0 baseline; the 2.3.1 interval change requires its own CI run.
 
 - The local-node smoke test was also completed manually: JacRed reports `3.18.0-oss`, Git SHA `c207d0d4`; `/version` and `/api/v2.0/indexers/all/results` returned HTTP 200, and the search response contained `Results`, release metadata and five ffprobe streams.
-- Remaining before production use: inspect the installed systemd unit, deploy the version to the existing adapter path, then run a single real local-source query and Prowlarr/Sonarr/Radarr connectivity/search checks.
+- Production checks completed on MINI-Ubuntu: the installed 2.3.0 adapter runs as `active` with autostart `enabled`; `/version` and local JSON search returned HTTP 200; movie search through Torznab returned 66 results and TV search returned 10 from 471 local matches; Prowlarr accepted the indexer and synchronized it to Radarr and Sonarr; searches work in both clients.
 - The automated suite covers syntax, request shape/User-Agent, serialized traffic, Retry-After parsing, 429/403/401 protection, persistent state, single HALF_OPEN probe, cache use while OPEN, and local synthetic connectivity responses. It does not replace the remaining deployment-level checks.
 
 - Default source is now `http://127.0.0.1:9117/api/v2.0/indexers/all/results`, the local JacRed instance documented in [jacred-sync-node](https://github.com/evgendman/jacred-sync-node). `JACRED_URL` keeps the adapter portable to any compatible JacRed v2 instance.
@@ -71,7 +71,7 @@ These checks confirm the listed scenarios; they do not substitute for validation
 - After an eligible successful probe, recovery starts at 60 seconds and advances through 30, 15, 10 and 5 seconds after three consecutive successful requests per stage. Escalation clears only after the configured stable-success count.
 - The local synthetic Torznab connectivity path remains source-free. Existing response and raw-result caches remain in place.
 
-### v2.3.0 configuration
+### v2.3.0 configuration (deployed baseline; 5000 ms default)
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -92,6 +92,21 @@ These checks confirm the listed scenarios; they do not substitute for validation
 | `JACRED_SOURCE_CACHE_MAX_ENTRIES` | `128` | Maximum raw source-result sets |
 | `JACRED_LOG_REQUEST_PARAMS` | `0` | Optional sanitized query diagnostics |
 
+### v2.3.1 candidate: relax steady-state pacing to one request per second
+
+- Lower `MIN_UPSTREAM_INTERVAL_FLOOR_MS` from 5000 ms to 1000 ms, and change the `JACRED_MIN_INTERVAL_MS` default from 5000 to 1000.
+- The global limiter still serializes upstream calls and measures the quiet interval from completion of one request to the start of the next. In steady state, the configured floor therefore permits at most one new upstream request per second; concurrent clients do not bypass the shared limiter.
+- This is a minimal pacing change only. HTTP 429/403/401 circuit-breaker behavior, persisted SQLite state, Retry-After handling, cooldowns and manual review rules remain unchanged.
+- The controlled recovery schedule remains `60, 30, 15, 10, 5` seconds. After an upstream incident, the adapter still restores request speed gradually rather than jumping straight to the steady-state 1-second floor.
+- The installed systemd drop-in must set `JACRED_MIN_INTERVAL_MS=1000`; changing the code default alone would not override an explicit service environment value of 5000.
+
+### v2.3.1 configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JACRED_MIN_INTERVAL_MS` | `1000` | Minimum quiet interval; values below 1000 ms are clamped to 1000 ms |
+| `JACRED_RECOVERY_INTERVALS_SECONDS` | `60,30,15,10,5` | Recovery after a protected upstream incident; left unchanged in this patch |
+
 Manual reset (only after reviewing the source status and configuration):
 
 ```bash
@@ -102,12 +117,12 @@ sudo systemctl start jacred-v2-adapter.service
 
 Adjust the service account and interpreter path to match the actual unit. Resetting protection does not itself test source reachability.
 
-### Remaining validation
+### Remaining validation for the v2.3.1 candidate
 
-1. Confirm the local runtime `/version` and run one controlled JSON search through `JACRED_URL`.
-2. Test concurrent queueing, cache hits while OPEN, both Retry-After formats, 429 escalation, 403/401 behavior, restart persistence and recovery against a local mock upstream.
-3. Run the Prowlarr/Sonarr/Radarr end-to-end topology after the mock tests pass.
-4. Do not send deliberate failure probes to public JacRed.
+1. Confirm the new GitHub Actions run passes Python compilation and all mock-upstream tests.
+2. Deploy the candidate and set `JACRED_MIN_INTERVAL_MS=1000` in the systemd drop-in; verify the startup log reports `minimum interval=1000ms`.
+3. Confirm the systemd service stays `active`, the Torznab endpoint returns HTTP 200 and real Sonarr/Radarr searches continue to work.
+4. Keep the existing 403/429 circuit-breaker, cooldown, persistent state and gradual recovery behavior unchanged. Do not send deliberate failure probes to public JacRed.
 
 ## Implemented behavior
 
@@ -188,7 +203,7 @@ Adjust the service account and interpreter path to match the actual unit. Resett
 
 ## Operational defaults
 
-The table below documents the **current v2.2.10 implementation**, not the planned protection redesign above. In particular, the current upstream interval remains 1000 ms and the full persistent circuit breaker is not implemented yet.
+This table is retained as a **historical v2.2.10 baseline**; it does not describe the current v2.3.x implementation. The current request pacing and persistent upstream-protection behavior are documented in the v2.3.x sections above.
 
 | Environment variable | Default | Purpose |
 |---|---:|---|
