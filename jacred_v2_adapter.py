@@ -466,10 +466,22 @@ def begin_upstream_attempt():
                 math.ceil(remaining),
                 f"JacRed upstream circuit OPEN: {state['failure_reason'] or 'cooldown active'}",
             )
-        update_protection_state(
-            state="HALF_OPEN",
-            failure_reason=state["failure_reason"] or "controlled recovery probe",
-        )
+        with PROTECTION_LOCK:
+            latest = read_protection_state()
+            if latest["manual_review"]:
+                raise UpstreamCoolingDown(
+                    86400,
+                    "JacRed upstream is blocked pending manual review",
+                )
+            if latest["state"] != "OPEN" or float(latest["block_until"] or 0) > time.time():
+                raise UpstreamCoolingDown(
+                    max(1, math.ceil(float(latest["block_until"] or time.time() + JACRED_PROBE_FAILURE_SECONDS) - time.time())),
+                    "JacRed upstream circuit changed while waiting for a slot",
+                )
+            update_protection_state(
+                state="HALF_OPEN",
+                failure_reason=latest["failure_reason"] or "controlled recovery probe",
+            )
         print(
             "WARNING upstream circuit HALF_OPEN; permitting exactly one controlled probe",
             file=sys.stderr,
