@@ -1759,13 +1759,6 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         except urllib.error.HTTPError as exc:
             body = str(exc).encode("utf-8", errors="replace")
-            self.send_response(502)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        except urllib.error.HTTPError as exc:
-            body = str(exc).encode("utf-8", errors="replace")
             status = 503 if exc.code == 429 else 502
             self.send_response(status)
             if exc.code == 429:
