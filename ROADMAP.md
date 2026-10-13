@@ -2,7 +2,7 @@
 
 [English documentation](README.md) | [Документация на русском](README.ru.md)
 
-Repository candidate version: **2.3.1**; last deployed and verified version on MINI-Ubuntu: **2.3.0** (2026-10-13)
+Current release on MINI-Ubuntu: **2.3.1** (installed 2026-10-13); CI-verified commit: `a1e7f30f14e75095cef15b1e5e7b73721b837b15`
 
 ## Project goal
 
@@ -59,7 +59,7 @@ These checks confirm the listed scenarios; they do not substitute for validation
 **v2.3.0 baseline validation as of 2026-10-13:** GitHub Actions run #12 passed Python compilation and all 17 mock-upstream tests on commit `025a0a57911cb5bd06d8c1c85a7c3425be8e5b79`. This validation applies to the 2.3.0 baseline; the 2.3.1 interval change requires its own CI run.
 
 - The local-node smoke test was also completed manually: JacRed reports `3.18.0-oss`, Git SHA `c207d0d4`; `/version` and `/api/v2.0/indexers/all/results` returned HTTP 200, and the search response contained `Results`, release metadata and five ffprobe streams.
-- Production checks completed on MINI-Ubuntu: the installed 2.3.0 adapter runs as `active` with autostart `enabled`; `/version` and local JSON search returned HTTP 200; movie search through Torznab returned 66 results and TV search returned 10 from 471 local matches; Prowlarr accepted the indexer and synchronized it to Radarr and Sonarr; searches work in both clients.
+- Baseline 2.3.0 production checks completed on MINI-Ubuntu: local JSON and Torznab searches succeeded; Prowlarr synchronized the indexer to Radarr and Sonarr, and real searches worked in both clients. On 2026-10-13, 2.3.1 was installed from its CI-verified commit, the service restarted successfully, autostart remained enabled, effective `JACRED_MIN_INTERVAL_MS=1000` was confirmed, and synthetic Torznab tests returned HTTP 200. Post-upgrade real-source and Arr-client checks remain pending.
 - The automated suite covers syntax, request shape/User-Agent, serialized traffic, Retry-After parsing, 429/403/401 protection, persistent state, single HALF_OPEN probe, cache use while OPEN, and local synthetic connectivity responses. It does not replace the remaining deployment-level checks.
 
 - Default source is now `http://127.0.0.1:9117/api/v2.0/indexers/all/results`, the local JacRed instance documented in [jacred-sync-node](https://github.com/evgendman/jacred-sync-node). `JACRED_URL` keeps the adapter portable to any compatible JacRed v2 instance.
@@ -92,7 +92,7 @@ These checks confirm the listed scenarios; they do not substitute for validation
 | `JACRED_SOURCE_CACHE_MAX_ENTRIES` | `128` | Maximum raw source-result sets |
 | `JACRED_LOG_REQUEST_PARAMS` | `0` | Optional sanitized query diagnostics |
 
-### v2.3.1 candidate: relax steady-state pacing to one request per second
+### v2.3.1: relax steady-state pacing to one request per second
 
 - Lower `MIN_UPSTREAM_INTERVAL_FLOOR_MS` from 5000 ms to 1000 ms, and change the `JACRED_MIN_INTERVAL_MS` default from 5000 to 1000.
 - The global limiter still serializes upstream calls and measures the quiet interval from completion of one request to the start of the next. In steady state, the configured floor therefore permits at most one new upstream request per second; concurrent clients do not bypass the shared limiter.
@@ -117,12 +117,11 @@ sudo systemctl start jacred-v2-adapter.service
 
 Adjust the service account and interpreter path to match the actual unit. Resetting protection does not itself test source reachability.
 
-### Remaining validation for the v2.3.1 candidate
+### Final validation for the v2.3.1 deployment
 
-1. Confirm the new GitHub Actions run passes Python compilation and all mock-upstream tests.
-2. Deploy the candidate and set `JACRED_MIN_INTERVAL_MS=1000` in the systemd drop-in; verify the startup log reports `minimum interval=1000ms`.
-3. Confirm the systemd service stays `active`, the Torznab endpoint returns HTTP 200 and real Sonarr/Radarr searches continue to work.
-4. Keep the existing 403/429 circuit-breaker, cooldown, persistent state and gradual recovery behavior unchanged. Do not send deliberate failure probes to public JacRed.
+1. Run one real movie or TV search through the installed adapter and confirm real items include magnet URLs and infohashes.
+2. Verify post-upgrade real searches in Sonarr and Radarr.
+3. Keep the existing 403/429 circuit-breaker, cooldown, persistent state and gradual recovery behavior unchanged. Do not send deliberate failure probes to public JacRed.
 
 ## Implemented behavior
 
