@@ -502,16 +502,22 @@ def begin_upstream_attempt():
 def wait_for_upstream_slot(deadline):
     global LAST_UPSTREAM_COMPLETION
 
-    # Do not spend the queue budget waiting for the normal 5-second interval:
-    # callers should receive 503 if a slot is not immediately eligible.
+    # This function runs only after the global upstream lock is acquired.
+    # Enforce the completion-based quiet interval without holding a request
+    # slot open for an unbounded sleep.
     with RATE_LIMIT_LOCK:
         now = time.monotonic()
         delay = LAST_UPSTREAM_COMPLETION + JACRED_MIN_INTERVAL_MS / 1000.0 - now
         if delay > 0:
-            raise UpstreamCoolingDown(
-                max(1, math.ceil(delay)),
-                f"JacRed request slot is not ready for {delay:.1f}s",
-            )
+            remaining_budget = deadline - now
+            if remaining_budget <= 0 or delay > remaining_budget:
+                raise UpstreamCoolingDown(
+                    max(1, math.ceil(delay)),
+                    f"JacRed request deferred for {delay:.1f}s; "
+                    f"maximum queue wait is {JACRED_MAX_QUEUE_WAIT_SECONDS}s",
+                )
+    if delay > 0:
+        time.sleep(delay)
 
     probe = begin_upstream_attempt()
     if probe:
