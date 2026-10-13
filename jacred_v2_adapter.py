@@ -502,58 +502,71 @@ def begin_upstream_attempt():
 def wait_for_upstream_slot(deadline):
     global LAST_UPSTREAM_COMPLETION
 
-    # This function runs only after the global upstream lock is acquired.
-    # Enforce the completion-based quiet interval without holding a request
-    # slot open for an unbounded sleep.
-    with RATE_LIMIT_LOCK:
-        now = time.monotonic()
-        delay = LAST_UPSTREAM_COMPLETION + JACRED_MIN_INTERVAL_MS / 1000.0 - now
-        if delay > 0:
-            remaining_budget = deadline - now
-            if remaining_budget <= 0 or delay > remaining_budget:
-                raise UpstreamCoolingDown(
-                    max(1, math.ceil(delay)),
-                    f"JacRed request deferred for {delay:.1f}s; "
-                    f"maximum queue wait is {JACRED_MAX_QUEUE_WAIT_SECONDS}s",
-                )
-    if delay > 0:
-        time.sleep(delay)
+    state = read_protection_state()
+    now_wall = time.time()
+    if state["manual_review"]:
+        raise UpstreamCoolingDown(
+            86400,
+            "JacRed upstream is blocked pending manual review",
+        )
 
-    probe = begin_upstream_attempt()
-    if probe:
+    probe_candidate = state["state"] == "OPEN"
+    if probe_candidate:
+        remaining_block = float(state["block_until"] or 0) - now_wall
+        if remaining_block > 0:
+            raise UpstreamCoolingDown(
+                math.ceil(remaining_block),
+                f"JacRed upstream circuit OPEN: {state['failure_reason'] or 'cooldown active'}",
+            )
+    elif state["state"] == "HALF_OPEN":
+        raise UpstreamCoolingDown(
+            JACRED_PROBE_FAILURE_SECONDS,
+            "JacRed recovery probe is already in progress",
+        )
+
+    if probe_candidate:
+        # One eligible request may probe after the persisted cooldown expires.
         interval_seconds = JACRED_MIN_INTERVAL_MS / 1000.0
     else:
-        state = read_protection_state()
-        stage = min(
-            int(state["recovery_stage"]),
-            len(JACRED_RECOVERY_INTERVALS_SECONDS) - 1,
+        recovering = bool(
+            state["failure_reason"]
+            or int(state["consecutive_429"])
+            or int(state["consecutive_403"])
+            or int(state["consecutive_failures"])
+            or int(state["recovery_stage"])
+            or int(state["recovery_successes"])
         )
-        interval_seconds = max(
-            JACRED_MIN_INTERVAL_MS / 1000.0,
-            float(JACRED_RECOVERY_INTERVALS_SECONDS[stage]),
-        )
-        if state["state"] == "OPEN":
-            remaining = float(state["block_until"] or 0) - time.time()
-            if remaining > 0 or state["manual_review"]:
-                raise UpstreamCoolingDown(
-                    max(1, math.ceil(remaining)) if remaining > 0 else 86400,
-                    "JacRed upstream circuit OPEN; no upstream request was started",
-                )
+        if recovering:
+            stage = min(
+                int(state["recovery_stage"]),
+                len(JACRED_RECOVERY_INTERVALS_SECONDS) - 1,
+            )
+            interval_seconds = max(
+                JACRED_MIN_INTERVAL_MS / 1000.0,
+                float(JACRED_RECOVERY_INTERVALS_SECONDS[stage]),
+            )
+        else:
+            # Normal CLOSED operation uses the configured floor (default 5 s),
+            # not the slower first step reserved for circuit recovery.
+            interval_seconds = JACRED_MIN_INTERVAL_MS / 1000.0
+
     with RATE_LIMIT_LOCK:
-        now = time.monotonic()
-        delay = LAST_UPSTREAM_COMPLETION + interval_seconds - now
-        if delay > 0:
-            if probe:
-                update_protection_state(
-                    state="OPEN",
-                    block_until=time.time() + JACRED_PROBE_FAILURE_SECONDS,
-                    failure_reason="Recovery probe could not obtain a request slot",
-                )
+        now_mono = time.monotonic()
+        delay = LAST_UPSTREAM_COMPLETION + interval_seconds - now_mono
+
+    if delay > 0:
+        remaining_budget = deadline - now_mono
+        if remaining_budget <= 0 or delay > remaining_budget:
             raise UpstreamCoolingDown(
                 max(1, math.ceil(delay)),
-                f"JacRed request slot is not ready for {delay:.1f}s",
+                f"JacRed request deferred for {delay:.1f}s; "
+                f"maximum queue wait is {JACRED_MAX_QUEUE_WAIT_SECONDS}s",
             )
-    return probe
+        time.sleep(delay)
+
+    # Claim HALF_OPEN only after a slot can be granted. The global request lock
+    # prevents another adapter thread from issuing a concurrent probe.
+    return begin_upstream_attempt()
 
 
 def log_request_diagnostics(params, key):
