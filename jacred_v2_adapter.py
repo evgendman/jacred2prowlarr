@@ -21,17 +21,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
 JACRED_SOURCE_CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_SOURCE_CACHE_TTL_SECONDS", "180")))
 JACRED_SOURCE_CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_SOURCE_CACHE_MAX_ENTRIES", "128")))
-MIN_UPSTREAM_INTERVAL_FLOOR_MS = 5000
-_requested_min_interval_ms = max(0, int(os.environ.get("JACRED_MIN_INTERVAL_MS", "5000")))
+MIN_UPSTREAM_INTERVAL_FLOOR_MS = 1000
+_requested_min_interval_ms = max(0, int(os.environ.get("JACRED_MIN_INTERVAL_MS", "1000")))
 JACRED_MIN_INTERVAL_MS = max(MIN_UPSTREAM_INTERVAL_FLOOR_MS, _requested_min_interval_ms)
 if _requested_min_interval_ms < MIN_UPSTREAM_INTERVAL_FLOOR_MS:
-    print("WARNING JACRED_MIN_INTERVAL_MS below the enforced 5000 ms floor; using 5000 ms", file=sys.stderr, flush=True)
+    print("WARNING JACRED_MIN_INTERVAL_MS below the enforced 1000 ms floor; using 1000 ms", file=sys.stderr, flush=True)
 JACRED_429_BACKOFF_SECONDS = max(1, int(os.environ.get("JACRED_429_BACKOFF_SECONDS", "60")))
 JACRED_429_BACKOFF_STEPS_SECONDS = tuple(
     max(1, int(value.strip()))
