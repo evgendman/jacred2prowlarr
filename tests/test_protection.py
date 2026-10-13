@@ -7,6 +7,7 @@ import time
 import unittest
 import urllib.error
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
@@ -46,6 +47,8 @@ class MockUpstreamHandler(BaseHTTPRequestHandler):
 class ProtectionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.adapter_server = None
+        self.adapter_thread = None
         self.state_path = adapter.JACRED_STATE_PATH
         self.url = adapter.JACRED_URL
         self.interval = adapter.JACRED_MIN_INTERVAL_MS
@@ -56,6 +59,12 @@ class ProtectionTests(unittest.TestCase):
         adapter.JACRED_USER_AGENT = "Mock-Adapter-Test"
         adapter.LAST_UPSTREAM_COMPLETION = 0
         adapter.reset_protection_state()
+        with adapter.CACHE_LOCK:
+            adapter.CACHE.clear()
+            adapter.INFLIGHT_LOCKS.clear()
+        with adapter.SOURCE_CACHE_LOCK:
+            adapter.SOURCE_CACHE.clear()
+            adapter.SOURCE_INFLIGHT_LOCKS.clear()
         MockUpstreamHandler.requests = []
         MockUpstreamHandler.status = 200
         MockUpstreamHandler.body = b'{"Results": []}'
@@ -68,6 +77,11 @@ class ProtectionTests(unittest.TestCase):
         adapter.JACRED_URL = f"http://127.0.0.1:{self.server.server_port}/api/v2.0/indexers/all/results"
 
     def tearDown(self):
+        if self.adapter_server is not None:
+            self.adapter_server.shutdown()
+            self.adapter_server.server_close()
+            if self.adapter_thread is not None:
+                self.adapter_thread.join(timeout=1)
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=1)
@@ -76,6 +90,15 @@ class ProtectionTests(unittest.TestCase):
         adapter.JACRED_MIN_INTERVAL_MS = self.interval
         adapter.JACRED_USER_AGENT = self.ua
         self.temp.cleanup()
+
+    def start_adapter_server(self):
+        self.adapter_server = ThreadingHTTPServer(("127.0.0.1", 0), adapter.Handler)
+        self.adapter_thread = threading.Thread(
+            target=self.adapter_server.serve_forever,
+            daemon=True,
+        )
+        self.adapter_thread.start()
+        return f"http://127.0.0.1:{self.adapter_server.server_port}"
 
     def test_local_default_and_interval_floor_are_configured(self):
         self.assertGreaterEqual(adapter.JACRED_MIN_INTERVAL_MS, 5000)
@@ -165,6 +188,101 @@ class ProtectionTests(unittest.TestCase):
         adapter.register_upstream_success()
         state = adapter.read_protection_state()
         self.assertEqual(state["consecutive_429"], 0)
+
+    def test_live_429_response_honors_retry_after_and_blocks_next_call(self):
+        MockUpstreamHandler.status = 429
+        MockUpstreamHandler.retry_after = "120"
+        with self.assertRaises(adapter.UpstreamCoolingDown) as caught:
+            adapter.query_jacred("rate-limit-case", "", "movie")
+        self.assertGreaterEqual(caught.exception.retry_after_seconds, 120)
+        self.assertEqual(adapter.read_protection_state()["state"], "OPEN")
+
+        MockUpstreamHandler.status = 200
+        with self.assertRaises(adapter.UpstreamCoolingDown):
+            adapter.query_jacred("second-rate-limit-case", "", "movie")
+        self.assertEqual(len(MockUpstreamHandler.requests), 1)
+
+    def test_live_403_stops_subsequent_upstream_requests(self):
+        MockUpstreamHandler.status = 403
+        with self.assertRaises(adapter.UpstreamCoolingDown):
+            adapter.query_jacred("forbidden-case", "", "movie")
+        state = adapter.read_protection_state()
+        self.assertEqual(state["state"], "OPEN")
+        self.assertFalse(state["manual_review"])
+
+        MockUpstreamHandler.status = 200
+        with self.assertRaises(adapter.UpstreamCoolingDown):
+            adapter.query_jacred("must-not-reach-source", "", "movie")
+        self.assertEqual(len(MockUpstreamHandler.requests), 1)
+
+    def test_only_one_half_open_probe_can_be_claimed(self):
+        adapter.register_http_403(
+            urllib.error.HTTPError(adapter.JACRED_URL, 403, "Forbidden", {}, None)
+        )
+        adapter.update_protection_state(
+            state="OPEN",
+            block_until=time.time() - 1,
+            manual_review=0,
+        )
+        barrier = threading.Barrier(3)
+        outcomes = []
+
+        def claim():
+            barrier.wait()
+            try:
+                outcomes.append(adapter.begin_upstream_attempt())
+            except adapter.UpstreamCoolingDown:
+                outcomes.append("blocked")
+
+        threads = [threading.Thread(target=claim) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        self.assertEqual(outcomes.count(True), 1)
+        self.assertEqual(outcomes.count("blocked"), 1)
+        self.assertEqual(adapter.read_protection_state()["state"], "HALF_OPEN")
+
+    def test_local_connectivity_test_does_not_call_upstream(self):
+        base = self.start_adapter_server()
+        with urllib.request.urlopen(base + "/torznab/api?t=movie", timeout=3) as response:
+            body = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+        self.assertIn("local movie test", body.lower())
+        self.assertEqual(MockUpstreamHandler.requests, [])
+
+    def test_cached_result_is_served_while_open_but_cache_miss_is_503(self):
+        base = self.start_adapter_server()
+        cached_url = base + "/torznab/api?t=movie&q=cache-open-test-unique"
+        with urllib.request.urlopen(cached_url, timeout=3) as response:
+            self.assertEqual(response.status, 200)
+            response.read()
+        self.assertEqual(len(MockUpstreamHandler.requests), 1)
+
+        adapter.register_http_429(1)
+        with urllib.request.urlopen(cached_url, timeout=3) as response:
+            self.assertEqual(response.status, 200)
+            response.read()
+        self.assertEqual(len(MockUpstreamHandler.requests), 1)
+
+        miss_url = base + "/torznab/api?t=movie&q=cache-miss-open-test-unique"
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(miss_url, timeout=3)
+        self.assertEqual(caught.exception.code, 503)
+        self.assertEqual(caught.exception.headers.get("Retry-After"), "60")
+        self.assertEqual(len(MockUpstreamHandler.requests), 1)
+
+    def test_403_aborts_combined_movie_tv_search(self):
+        base = self.start_adapter_server()
+        MockUpstreamHandler.status = 403
+        url = base + "/torznab/api?t=search&q=fatal-branch-test-unique"
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(url, timeout=3)
+        self.assertEqual(caught.exception.code, 503)
+        self.assertEqual(len(MockUpstreamHandler.requests), 1)
+        self.assertEqual(adapter.read_protection_state()["state"], "OPEN")
 
     def test_two_simultaneous_queries_are_serialized(self):
         # Speed up only this unit test; deployment configuration is separately
