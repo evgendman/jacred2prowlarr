@@ -182,13 +182,14 @@ class ProtectionTests(unittest.TestCase):
             thread.start()
         for thread in threads:
             thread.join(timeout=2)
-        self.assertEqual(len(MockUpstreamHandler.requests), 2)
+        self.assertTrue(all(not thread.is_alive() for thread in threads), "query thread did not finish")
+        self.assertFalse(errors, f"query errors: {errors!r}")
+        self.assertEqual(len(MockUpstreamHandler.requests), 2, f"received requests: {MockUpstreamHandler.requests!r}")
         self.assertEqual(MockUpstreamHandler.max_active, 1)
         self.assertGreaterEqual(
             MockUpstreamHandler.requests[1][2] - MockUpstreamHandler.requests[0][2],
             0.015,
         )
-        self.assertFalse(errors)
 
 
 if __name__ == "__main__":
