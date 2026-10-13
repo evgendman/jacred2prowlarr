@@ -532,6 +532,13 @@ def wait_for_upstream_slot(deadline):
             JACRED_MIN_INTERVAL_MS / 1000.0,
             float(JACRED_RECOVERY_INTERVALS_SECONDS[stage]),
         )
+        if state["state"] == "OPEN":
+            remaining = float(state["block_until"] or 0) - time.time()
+            if remaining > 0 or state["manual_review"]:
+                raise UpstreamCoolingDown(
+                    max(1, math.ceil(remaining)) if remaining > 0 else 86400,
+                    "JacRed upstream circuit OPEN; no upstream request was started",
+                )
 
     with RATE_LIMIT_LOCK:
         now = time.monotonic()
