@@ -478,6 +478,8 @@ def begin_upstream_attempt():
         return True
 
     if state["state"] == "HALF_OPEN":
+        # A concurrent request may have passed the initial queue check while
+        # another thread claimed the sole probe. Never permit a second probe.
         raise UpstreamCoolingDown(
             JACRED_PROBE_FAILURE_SECONDS,
             "JacRed recovery probe is already in progress",
@@ -1301,6 +1303,10 @@ def query_jacred(query, year, media_type):
                 raise cooling from exc
             raise
         except Exception as exc:
+            # Circuit-control exceptions are not upstream failures and must
+            # not overwrite the persisted OPEN/HALF_OPEN state.
+            if isinstance(exc, UpstreamCoolingDown):
+                raise
             cooling = register_other_failure(
                 f"{type(exc).__name__}: {exc}",
                 probe,
