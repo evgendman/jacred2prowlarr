@@ -126,6 +126,20 @@ class ProtectionTests(unittest.TestCase):
         self.assertTrue(state["manual_review"])
         self.assertGreaterEqual(state["block_until"] - time.time(), 604790)
 
+    def test_403_during_recovery_probe_sets_manual_review(self):
+        adapter.register_http_403(
+            urllib.error.HTTPError(adapter.JACRED_URL, 403, "Forbidden", {}, None)
+        )
+        adapter.update_protection_state(state="OPEN", block_until=time.time() - 1, manual_review=0)
+        probe = adapter.begin_upstream_attempt()
+        self.assertTrue(probe)
+        adapter.register_http_403(
+            urllib.error.HTTPError(adapter.JACRED_URL, 403, "Forbidden", {}, None)
+        )
+        state = adapter.read_protection_state()
+        self.assertTrue(state["manual_review"])
+        self.assertEqual(state["consecutive_403"], 2)
+
     def test_401_requires_manual_review(self):
         error = urllib.error.HTTPError(adapter.JACRED_URL, 401, "Unauthorized", {}, None)
         adapter.register_http_401(error)
