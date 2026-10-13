@@ -54,120 +54,56 @@ These checks confirm the listed scenarios; they do not substitute for validation
 3. Verify actual end-to-end automatic selection with the intended Custom Formats, including preferred voice/dubbing scores as well as resolution, source format and HDR. The adapter exposes these signals; scoring policy belongs to Sonarr/Radarr.
 4. Implement and test upstream failure handling against a local mock HTTP source: HTTP 429 and both `Retry-After` formats, HTTP 403, HTTP 401, a busy queue, timeouts, and partial movie/TV branch failures. Do not use public JacRed to generate failure cases. Any real-source recovery check must be a single controlled attempt after the protection period.
 
-## Planned: upstream protection and controlled recovery
+## v2.3.0: local source and persistent upstream protection
 
-**Status:** approved design; not implemented in adapter v2.2.10. The current code has a per-process request limiter, a one-second default interval, a fixed fallback cooldown for HTTP 429, and no dedicated circuit-breaker behavior for HTTP 403. The requirements below describe the target implementation, not current capabilities.
+**Implementation status:** code added on branch `v2.3.0-local-jacred-protection`; automated mock-upstream validation is still required before treating this release as production-verified.
 
-### 1. One upstream gateway
+- Default source is now `http://127.0.0.1:9117/api/v2.0/indexers/all/results`, the local JacRed instance documented in [jacred-sync-node](https://github.com/evgendman/jacred-sync-node). `JACRED_URL` keeps the adapter portable to any compatible JacRed v2 instance.
+- The default User-Agent is a stable Chrome 111 value aligned with the upstream client's inspected HTTP client; `JACRED_USER_AGENT` can override it. Do not use header changes to bypass an active restriction.
+- `JACRED_MIN_INTERVAL_MS` defaults to 5000 ms and is clamped to a hard 5000 ms minimum. Pacing is measured from completion of the prior upstream attempt.
+- SQLite stores circuit state, cooldown expiry, failure counters and gradual-recovery progress at `JACRED_STATE_PATH` (default `/var/lib/jacred-v2-adapter/upstream_state.sqlite3`). The service account must be able to write this path.
+- HTTP 429 opens the circuit with escalating delays (60 s, 5 min, 15 min, 1 h, 6 h) and honors the longer of configured delay and source `Retry-After`.
+- First HTTP 403 opens a 24-hour safety block. A 403 on the eligible controlled probe opens a seven-day block and sets a persistent manual-review flag; expiry alone does not permit another probe. HTTP 401 requires manual intervention.
+- After an eligible successful probe, recovery starts at 60 seconds and advances through 30, 15, 10 and 5 seconds after three consecutive successful requests per stage. Escalation clears only after the configured stable-success count.
+- The local synthetic Torznab connectivity path remains source-free. Existing response and raw-result caches remain in place.
 
-- The adapter must be the only component allowed to make requests to public JacRed. Future tools, including `torr2strm`, must use the local adapter rather than calling JacRed directly.
-- Only one active adapter instance may issue upstream requests. Legacy and V2 adapters must not run side-by-side with independent limiters.
-- If multi-process or multi-host operation is ever supported, it must first gain a cross-process/shared lock and shared state. A Python thread lock and process-local counters are not sufficient.
-- Local Torznab connectivity tests must continue to use synthetic responses and must not contact JacRed.
+### v2.3.0 configuration
 
-### 2. Strictly sequential upstream requests
+| Variable | Default | Purpose |
+|---|---|---|
+| `JACRED_URL` | `http://127.0.0.1:9117/api/v2.0/indexers/all/results` | JacRed v2 JSON endpoint; override for another compatible node |
+| `JACRED_USER_AGENT` | Stable Chrome 111 UA | Fixed upstream HTTP User-Agent |
+| `JACRED_MIN_INTERVAL_MS` | `5000` | Minimum quiet interval; lower values are clamped to 5000 ms |
+| `JACRED_MAX_QUEUE_WAIT_SECONDS` | `10` | Queue wait budget; exceeding it returns local HTTP 503 |
+| `JACRED_STATE_PATH` | `/var/lib/jacred-v2-adapter/upstream_state.sqlite3` | Durable SQLite protection state |
+| `JACRED_429_BACKOFF_SECONDS` | `60` | Legacy-compatible fallback for malformed/missing Retry-After |
+| `JACRED_429_BACKOFF_STEPS_SECONDS` | `60,300,900,3600,21600` | Escalating 429 delays |
+| `JACRED_RECOVERY_INTERVALS_SECONDS` | `60,30,15,10,5` | Gradual-recovery intervals; values are never below five seconds |
+| `JACRED_RECOVERY_SUCCESS_COUNT` | `3` | Consecutive successes per recovery step |
+| `JACRED_STABLE_SUCCESS_COUNT` | `15` | Stable successes before clearing failure escalation |
+| `JACRED_PROBE_FAILURE_SECONDS` | `300` | Temporary block after a failed non-403 recovery probe |
+| `JACRED_CACHE_TTL_SECONDS` | `180` | Rendered-response cache lifetime |
+| `JACRED_CACHE_MAX_ENTRIES` | `512` | Maximum rendered responses |
+| `JACRED_SOURCE_CACHE_TTL_SECONDS` | `180` | Raw source-result cache lifetime |
+| `JACRED_SOURCE_CACHE_MAX_ENTRIES` | `128` | Maximum raw source-result sets |
+| `JACRED_LOG_REQUEST_PARAMS` | `0` | Optional sanitized query diagnostics |
 
-- Allow at most one in-flight request to JacRed at a time, regardless of the number of local clients, HTTP handler threads, or search branches.
-- Set `JACRED_MIN_INTERVAL_MS` to a default of **5000 ms** and enforce 5000 ms as the minimum permitted setting. The configured quiet interval is measured from completion of the previous upstream attempt to the start of the next one.
-- Keep identical-request coalescing and both existing caches; use them to avoid unnecessary upstream traffic.
-- If the next slot cannot be granted within `JACRED_MAX_QUEUE_WAIT_SECONDS`, return local HTTP 503 with `Retry-After` and do not make an upstream request.
-- A combined movie + TV search must not trigger concurrent upstream branches. A fatal source response must cancel the remaining branches and title variants for that operation.
+Manual reset (only after reviewing the source status and configuration):
 
-### 3. Persistent circuit breaker: CLOSED / OPEN / HALF_OPEN
+```bash
+sudo systemctl stop jacred-v2-adapter.service
+sudo -u jacred-v2-adapter /opt/jacred-v2-adapter/venv/bin/python /opt/jacred-v2-adapter/jacred_v2_adapter.py --reset-upstream-protection
+sudo systemctl start jacred-v2-adapter.service
+```
 
-- **CLOSED:** normal operation, still subject to the sequential scheduler and minimum interval.
-- **OPEN:** upstream requests are prohibited until the recorded cooldown expires. Local clients receive HTTP 503 with a `Retry-After` matching the remaining block time. Cache hits may still be served if their data is valid; a cache miss must not contact JacRed.
-- **HALF_OPEN:** after an eligible cooldown, exactly one controlled probe may run. All other upstream requests remain blocked while the probe is in progress.
-- Persist state, block-until timestamp, consecutive failure counters, failure reason, and recovery stage in a small SQLite state file at a durable, service-writable path. Updates must be atomic, and a service restart must not reset an active block or the failure escalation.
-- A successful probe does not immediately restore normal speed. Clear failure escalation only after a configurable stable run of successful requests, not after one success.
+Adjust the service account and interpreter path to match the actual unit. Resetting protection does not itself test source reachability.
 
-### 4. HTTP 429: escalating backoff and Retry-After
+### Remaining validation
 
-For `429 Too Many Requests`, stop all upstream traffic and escalate the shared cooldown according to this default sequence:
-
-| Consecutive 429 stage | Default delay |
-|---|---:|
-| 1 | 60 seconds |
-| 2 | 5 minutes |
-| 3 | 15 minutes |
-| 4 | 1 hour |
-| 5 and later | 6 hours |
-
-- Parse `Retry-After` both as seconds and as an HTTP date.
-- Never retry earlier than either the internally calculated backoff or the source's requested wait; use the longer remaining delay.
-- Keep the delay sequence configurable, with the values above as defaults. Preserve compatibility with the existing `JACRED_429_BACKOFF_SECONDS` setting or document its replacement clearly.
-- Do not reset the failure level after a single success. Use the controlled recovery process described below.
-- Do not cache a 429 response as a successful search result.
-
-### 5. HTTP 403 and 401 handling
-
-**First HTTP 403:**
-
-- Immediately open the circuit for **24 hours** and stop all other upstream requests, including remaining title variants and branches of the current search.
-- Do not cache the response as a successful result.
-- Log a CRITICAL event with timestamp, status, safe response headers, a bounded response-body excerpt, and the block expiry. Return local HTTP 503 with `Retry-After` to clients while blocked.
-
-**Probe after the first 24-hour block:**
-
-- Permit exactly one controlled probe in HALF_OPEN.
-- If it succeeds, enter gradual recovery.
-- If it returns 403 again, block upstream traffic for **7 days** and require a manual decision before any further probe. Do not resume probing automatically when those seven days expire.
-
-The 24-hour and 7-day periods are local safety policy, **not a claim about JacRed's actual ban duration**. A 403 response without explicit timing headers does not disclose when access will be restored.
-
-For HTTP 401, stop upstream requests and require manual inspection of authentication/configuration. Do not repeatedly retry unchanged credentials.
-
-### 6. Gradual speed recovery
-
-After an eligible HALF_OPEN probe succeeds, pace subsequent upstream requests using these intervals:
-
-**60 → 30 → 15 → 10 → 5 seconds.**
-
-Advance one step only after **three consecutive successful upstream requests** at the current step. A new 429 returns the circuit to OPEN and increases the failure stage; a new 403 follows the stricter 403 policy. The normal 5-second floor remains in force. Make the recovery steps and success count configurable.
-
-### 7. User-Agent compatibility
-
-- Adapter v2.2.10 currently sends the project-specific value `JacRed-V2-Torznab-Adapter/{VERSION}`.
-- In the next adapter version, replace this default with a stable value aligned with the User-Agent used by the upstream JacRed HTTP client. In the upstream source inspected on 2026-10-12, `Infrastructure/Networking/HttpClient.cs` used `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36`. Recheck the then-current upstream source before implementation; this is a compatibility reference, not a permanent API contract.
-- If configurable, expose it as `JACRED_USER_AGENT`, document the fixed default, and keep the value stable across all upstream requests.
-- Add a local-mock test confirming that the selected User-Agent is sent consistently. Do not rotate values randomly or change the header in reaction to each error.
-- The observed responses do not prove that User-Agent alone caused or resolves all 403 responses. Do not use this change to probe repeatedly or bypass an active 403 restriction. Keep the existing cooldown and single controlled recovery-check policy; see [docs/user-agent.md](docs/user-agent.md).
-
-### 8. Diagnostics and safe logging
-
-For each upstream attempt and circuit-state change, log UTC timestamp, operation/request correlation ID, queue wait, request duration, HTTP status or exception class, state transition, failure stage, calculated cooldown, and next eligible request time. Record `Retry-After`, `Content-Type`, `Content-Length`, `Server`, `Date`, and available request/correlation IDs when present.
-
-For error bodies, log only a bounded excerpt adequate for diagnosis. Never log API keys or other secrets. Full search parameters remain opt-in and must redact credential-like values. Logs must make it possible to establish the order and timing of 429/403 responses and determine whether retries continued after the first fatal response.
-
-### 9. Cache behavior while protected
-
-- Retain the existing rendered Torznab-response cache and raw JacRed-result cache.
-- Serve valid cached results during OPEN when the requested result can be produced entirely from cache.
-- On cache miss during OPEN, return local 503 with `Retry-After`; never make an upstream request.
-- Never cache upstream errors, timeouts, or partial combined-search results as complete successful results.
-- Cache and request coalescing do not replace the global sequential scheduler or persisted circuit-breaker state.
-
-### 10. Required automated tests before release
-
-Use a local mock HTTP upstream for these cases; do not deliberately provoke rate limiting or 403 errors on public JacRed.
-
-1. Concurrent local requests never create simultaneous upstream requests.
-2. The configured upstream interval can never be lower than 5000 ms.
-3. Identical searches are coalesced and cached; different local filters reuse raw results where applicable.
-4. Both `Retry-After` formats are parsed, longer source delays are respected, and the 429 sequence escalates as specified.
-5. The first 403 cancels all remaining search branches and variants, opens a 24-hour block, and prevents other clients from contacting the source.
-6. The single HALF_OPEN probe is enforced under concurrent client load; a second 403 establishes the seven-day block and manual-review requirement.
-7. HTTP 401 requires manual intervention and cannot trigger uncontrolled retries.
-8. Valid cache hits work during OPEN, while cache misses return local 503 without upstream traffic.
-9. Restarting the service preserves OPEN state, cooldown expiry, counters, and recovery stage.
-10. Successful probes use the gradual recovery sequence; subsequent 429/403 responses reset protection as specified.
-11. Combined movie/TV requests do not run upstream branches concurrently or cache a partial result as success.
-12. Local Prowlarr/Sonarr/Radarr connectivity tests still never contact JacRed.
-13. Logs preserve enough information to reconstruct failure timing without exposing secrets.
-
-### 11. Configuration/documentation update
-
-When implementing this design, update the English and Russian READMEs and the deployment instructions alongside the code. Document all new parameters and defaults, persistent-state location and permissions, state transitions, response behavior during OPEN, log interpretation, and the manual recovery procedure. Do not describe these target behaviors as implemented until the code and mock-upstream tests confirm them.
+1. Confirm the local runtime `/version` and run one controlled JSON search through `JACRED_URL`.
+2. Test concurrent queueing, cache hits while OPEN, both Retry-After formats, 429 escalation, 403/401 behavior, restart persistence and recovery against a local mock upstream.
+3. Run the Prowlarr/Sonarr/Radarr end-to-end topology after the mock tests pass.
+4. Do not send deliberate failure probes to public JacRed.
 
 ## Implemented behavior
 
