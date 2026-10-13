@@ -56,7 +56,11 @@ These checks confirm the listed scenarios; they do not substitute for validation
 
 ## v2.3.0: local source and persistent upstream protection
 
-**Implementation status:** code added on branch `v2.3.0-local-jacred-protection`; automated mock-upstream validation is still required before treating this release as production-verified.
+**Implementation status as of 2026-10-13:** GitHub Actions run #11 passed Python compilation and all 17 mock-upstream tests on branch `v2.3.0-ci-validation`. This validates the covered test cases, but does not yet constitute complete production verification.
+
+- The local-node smoke test was also completed manually: JacRed reports `3.18.0-oss`, Git SHA `c207d0d4`; `/version` and `/api/v2.0/indexers/all/results` returned HTTP 200, and the search response contained `Results`, release metadata and five ffprobe streams.
+- Remaining before production use: inspect the installed systemd unit, deploy the version to the existing adapter path, then run a single real local-source query and Prowlarr/Sonarr/Radarr connectivity/search checks.
+- The automated suite covers syntax, request shape/User-Agent, serialized traffic, Retry-After parsing, 429/403/401 protection, persistent state, single HALF_OPEN probe, cache use while OPEN, and local synthetic connectivity responses. It does not replace the remaining deployment-level checks.
 
 - Default source is now `http://127.0.0.1:9117/api/v2.0/indexers/all/results`, the local JacRed instance documented in [jacred-sync-node](https://github.com/evgendman/jacred-sync-node). `JACRED_URL` keeps the adapter portable to any compatible JacRed v2 instance.
 - The default User-Agent is a stable Chrome 111 value aligned with the upstream client's inspected HTTP client; `JACRED_USER_AGENT` can override it. Do not use header changes to bypass an active restriction.
