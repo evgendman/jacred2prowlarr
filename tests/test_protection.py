@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
@@ -83,9 +84,10 @@ class ProtectionTests(unittest.TestCase):
     def test_user_agent_and_v2_query_shape(self):
         self.assertEqual(adapter.query_jacred("Test title", "2024", "movie"), [])
         path, ua, _ = MockUpstreamHandler.requests[-1]
-        self.assertIn("q=Test+title", path)
-        self.assertIn("category=movie_", path)
-        self.assertIn("year=2024", path)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        self.assertEqual(query["q"], ["Test title"])
+        self.assertEqual(query["category"], ["movie_"])
+        self.assertEqual(query["year"], ["2024"])
         self.assertEqual(ua, "Mock-Adapter-Test")
 
     def test_retry_after_seconds_and_http_date(self):
