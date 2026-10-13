@@ -4,7 +4,7 @@
 
 **JacRed v2 JSON → Torznab adapter for Prowlarr, Sonarr and Radarr.**
 
-Current version: **2.2.10**
+Current version: **2.3.0**
 
 The adapter turns JacRed's Russian-tracker release data into consistent Torznab results that the *Arr applications can parse and rank more reliably. It is intended to bridge two gaps: Russian release titles do not always follow the naming patterns expected by Sonarr/Radarr, and a direct indexer connectivity test may fail when the upstream returns no real result for an empty search.
 
@@ -40,7 +40,7 @@ JacRed TV + Movies adapter
   127.0.0.1:9128/torznab
        |
        v
-JacRed v2 JSON API (jac.red)
+Local JacRed v2 JSON API (127.0.0.1:9117)
 ```
 
 Prowlarr sees the adapter as a Torznab indexer. The adapter listens on localhost and queries JacRed **only when it receives a real search request**; it does not poll the source in the background. One running adapter can serve Prowlarr searches originating from multiple Sonarr/Radarr instances, including separate 1080p and 4K instances, sharing in-memory caches and the same upstream request limiter.
@@ -178,32 +178,58 @@ This distinction matters when several *Arr clients or quality tiers search for t
 
 The caches are in memory and live for the lifetime of the service process; they are not persistent storage.
 
-## Upstream request pacing and error handling
+## Upstream pacing, circuit breaker and error handling
 
-All outbound JacRed requests share one process-wide limiter:
+By default the adapter queries the local JacRed JSON endpoint:
 
-- requests are serialized rather than sent in parallel;
-- by default, the adapter observes a minimum **1000 ms quiet interval** between completed upstream requests and the next request;
-- HTTP 429 activates a global cooldown and honors `Retry-After` when JacRed provides it;
-- if a request would have to wait longer than the configured queue budget, the adapter fails fast with HTTP 503 and `Retry-After`, instead of holding the client connection until it times out;
-- a successful TV or movie branch is preserved if the other branch of a generic search fails, while partial responses are not cached.
+`http://127.0.0.1:9117/api/v2.0/indexers/all/results`
 
-User-Agent observations and the planned next-version compatibility change are documented in [docs/user-agent.md](docs/user-agent.md). The default change must not be used to probe an active 403 restriction.
+Set `JACRED_URL` to use any compatible JacRed v2 instance; the adapter is not hard-wired to the local node. See [jacred-sync-node](https://github.com/evgendman/jacred-sync-node) for the local deployment.
 
-Default environment settings:
+- Outbound calls are strictly serialized. The quiet interval is measured from completion of the previous upstream attempt and defaults to **5000 ms**; values below 5000 are clamped to the 5000 ms floor.
+- If an upstream slot cannot be granted within `JACRED_MAX_QUEUE_WAIT_SECONDS`, the adapter returns local HTTP 503 with `Retry-After` and does not start the request.
+- HTTP 429 opens a shared circuit breaker with escalating delays of 60 seconds, 5 minutes, 15 minutes, 1 hour and 6 hours. The longer of the internal delay and source `Retry-After` is respected.
+- The first HTTP 403 opens a 24-hour safety block. If the one controlled probe after that block returns 403 again, the adapter blocks for seven days and requires manual review; it will not probe automatically after the seven-day period.
+- HTTP 401 disables upstream requests until authentication/configuration has been reviewed manually.
+- Circuit state, block expiry, failure counters and recovery progress are persisted in SQLite across service restarts.
+- After a successful controlled probe, gradual recovery uses **60 → 30 → 15 → 10 → 5 seconds**, advancing after three consecutive successful requests at each stage.
+- Local synthetic Prowlarr/Sonarr/Radarr connectivity tests continue to avoid JacRed. Both the raw-result and rendered-response caches remain enabled.
+
+### Environment settings
 
 | Variable | Default | Purpose |
-|---|---:|---|
-| `JACRED_MIN_INTERVAL_MS` | `1000` | Minimum quiet interval between upstream requests |
-| `JACRED_429_BACKOFF_SECONDS` | `60` | Fallback cooldown after HTTP 429 without a usable `Retry-After` |
-| `JACRED_MAX_QUEUE_WAIT_SECONDS` | `10` | Maximum time allowed waiting for an upstream slot |
+|---|---|---|
+| `JACRED_URL` | `http://127.0.0.1:9117/api/v2.0/indexers/all/results` | JacRed v2 JSON endpoint |
+| `JACRED_USER_AGENT` | Stable Chrome 111 UA | Fixed User-Agent for upstream requests |
+| `JACRED_MIN_INTERVAL_MS` | `5000` | Minimum quiet interval; values below this are clamped |
+| `JACRED_MAX_QUEUE_WAIT_SECONDS` | `10` | Maximum wait for a request slot |
+| `JACRED_STATE_PATH` | `/var/lib/jacred-v2-adapter/upstream_state.sqlite3` | Persistent SQLite protection state |
+| `JACRED_429_BACKOFF_SECONDS` | `60` | Legacy-compatible fallback for absent/invalid Retry-After |
+| `JACRED_429_BACKOFF_STEPS_SECONDS` | `60,300,900,3600,21600` | Escalating 429 delays |
+| `JACRED_RECOVERY_INTERVALS_SECONDS` | `60,30,15,10,5` | Gradual recovery intervals |
+| `JACRED_RECOVERY_SUCCESS_COUNT` | `3` | Consecutive successes per recovery step |
+| `JACRED_STABLE_SUCCESS_COUNT` | `15` | Stable successes before clearing escalation |
+| `JACRED_PROBE_FAILURE_SECONDS` | `300` | Temporary block after a failed non-403 probe |
 | `JACRED_CACHE_TTL_SECONDS` | `180` | Rendered-response cache lifetime |
 | `JACRED_CACHE_MAX_ENTRIES` | `512` | Maximum rendered responses |
 | `JACRED_SOURCE_CACHE_TTL_SECONDS` | `180` | Raw source-result cache lifetime |
-| `JACRED_SOURCE_CACHE_MAX_ENTRIES` | `128` | Maximum raw source-result sets |
-| `JACRED_LOG_REQUEST_PARAMS` | `0` | Opt-in request diagnostics; off by default |
+| `JACRED_SOURCE_CACHE_MAX_ENTRIES` | `128` | Maximum raw result sets |
+| `JACRED_LOG_REQUEST_PARAMS` | `0` | Optional sanitized request diagnostics |
 
-Settings can be changed with systemd service environment overrides. Diagnostic query logging should be enabled only when troubleshooting; credential-like parameters are redacted.
+The directory containing `JACRED_STATE_PATH` must be writable by the systemd service account. Inspect the unit and permissions before deploying the new version.
+
+### Manual protection reset
+
+Only reset after reviewing source reachability and the reason for the block:
+
+```bash
+sudo systemctl stop jacred-v2-adapter.service
+sudo -u jacred-v2-adapter /opt/jacred-v2-adapter/venv/bin/python /opt/jacred-v2-adapter/jacred_v2_adapter.py --reset-upstream-protection
+sudo systemctl start jacred-v2-adapter.service
+```
+
+Replace the service account and interpreter path if your unit uses different values. Resetting the state does not probe JacRed or establish that the source is reachable.
+
 
 ## Deployment
 
