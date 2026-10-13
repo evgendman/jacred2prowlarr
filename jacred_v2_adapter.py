@@ -1335,6 +1335,12 @@ def query_jacred(query, year, media_type):
             # An error must never clear the active block or failure escalation.
             if "data" in locals() and isinstance(data, dict) and isinstance(data.get("Results") or [], list):
                 register_upstream_success(probe)
+            elif probe:
+                # A failed recovery probe must leave the circuit OPEN, even for
+                # transport errors or malformed JSON that are not HTTP status codes.
+                state = read_protection_state()
+                if state["state"] == "HALF_OPEN":
+                    register_other_failure("recovery probe failed before a valid response", probe=True)
     finally:
         UPSTREAM_REQUEST_LOCK.release()
 
