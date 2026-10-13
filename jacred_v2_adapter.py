@@ -1300,7 +1300,6 @@ def query_jacred(query, year, media_type):
             results = data.get("Results") or []
             if not isinstance(results, list):
                 raise ValueError("JacRed JSON field Results must be a list")
-            register_upstream_success(probe)
             return [item for item in results if isinstance(item, dict)]
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
@@ -1332,6 +1331,10 @@ def query_jacred(query, year, media_type):
         finally:
             with RATE_LIMIT_LOCK:
                 LAST_UPSTREAM_COMPLETION = time.monotonic()
+            # Count only a completed, valid JSON response as an upstream success.
+            # An error must never clear the active block or failure escalation.
+            if "data" in locals() and isinstance(data, dict) and isinstance(data.get("Results") or [], list):
+                register_upstream_success(probe)
     finally:
         UPSTREAM_REQUEST_LOCK.release()
 
