@@ -528,11 +528,13 @@ def wait_for_upstream_slot(deadline):
         # One eligible request may probe after the persisted cooldown expires.
         interval_seconds = JACRED_MIN_INTERVAL_MS / 1000.0
     else:
+        # Recovery pacing applies only after a rate-limit/access block or
+        # a failed HALF_OPEN probe. A transient ordinary 5xx/timeout must not
+        # accidentally switch every subsequent request to the 60-second step.
         recovering = bool(
-            state["failure_reason"]
-            or int(state["consecutive_429"])
+            int(state["consecutive_429"])
             or int(state["consecutive_403"])
-            or int(state["consecutive_failures"])
+            or str(state["failure_reason"]).startswith("HALF_OPEN probe failed:")
             or int(state["recovery_stage"])
             or int(state["recovery_successes"])
         )
