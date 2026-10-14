@@ -4,8 +4,10 @@ import email.utils
 import hashlib
 import html
 import json
+import math
 import os
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -19,17 +21,43 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.2.10"
+VERSION = "2.3.1"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
 JACRED_SOURCE_CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_SOURCE_CACHE_TTL_SECONDS", "180")))
 JACRED_SOURCE_CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_SOURCE_CACHE_MAX_ENTRIES", "128")))
-JACRED_MIN_INTERVAL_MS = max(0, int(os.environ.get("JACRED_MIN_INTERVAL_MS", "1000")))
+MIN_UPSTREAM_INTERVAL_FLOOR_MS = 1000
+_requested_min_interval_ms = max(0, int(os.environ.get("JACRED_MIN_INTERVAL_MS", "1000")))
+JACRED_MIN_INTERVAL_MS = max(MIN_UPSTREAM_INTERVAL_FLOOR_MS, _requested_min_interval_ms)
+if _requested_min_interval_ms < MIN_UPSTREAM_INTERVAL_FLOOR_MS:
+    print("WARNING JACRED_MIN_INTERVAL_MS below the enforced 1000 ms floor; using 1000 ms", file=sys.stderr, flush=True)
 JACRED_429_BACKOFF_SECONDS = max(1, int(os.environ.get("JACRED_429_BACKOFF_SECONDS", "60")))
+JACRED_429_BACKOFF_STEPS_SECONDS = tuple(
+    max(1, int(value.strip()))
+    for value in os.environ.get("JACRED_429_BACKOFF_STEPS_SECONDS", "60,300,900,3600,21600").split(",")
+    if value.strip()
+) or (60, 300, 900, 3600, 21600)
+JACRED_RECOVERY_INTERVALS_SECONDS = tuple(
+    max(5, int(value.strip()))
+    for value in os.environ.get("JACRED_RECOVERY_INTERVALS_SECONDS", "60,30,15,10,5").split(",")
+    if value.strip()
+) or (60, 30, 15, 10, 5)
+JACRED_RECOVERY_SUCCESS_COUNT = max(1, int(os.environ.get("JACRED_RECOVERY_SUCCESS_COUNT", "3")))
+JACRED_STABLE_SUCCESS_COUNT = max(1, int(os.environ.get("JACRED_STABLE_SUCCESS_COUNT", "15")))
+JACRED_PROBE_FAILURE_SECONDS = max(60, int(os.environ.get("JACRED_PROBE_FAILURE_SECONDS", "300")))
 JACRED_MAX_QUEUE_WAIT_SECONDS = max(1, int(os.environ.get("JACRED_MAX_QUEUE_WAIT_SECONDS", "10")))
+JACRED_STATE_PATH = os.environ.get("JACRED_STATE_PATH", "/var/lib/jacred-v2-adapter/upstream_state.sqlite3").strip() or "/var/lib/jacred-v2-adapter/upstream_state.sqlite3"
+JACRED_USER_AGENT = os.environ.get(
+    "JACRED_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36",
+).strip()
 REQUEST_PARAMS_LOGGING = os.environ.get("JACRED_LOG_REQUEST_PARAMS", "0").strip().lower() in {"1", "true", "yes", "on"}
-JACRED_URL = "https://jac.red/api/v2.0/indexers/all/results"
+JACRED_URL = os.environ.get(
+    "JACRED_URL",
+    "http://127.0.0.1:9117/api/v2.0/indexers/all/results",
+).strip() or "http://127.0.0.1:9117/api/v2.0/indexers/all/results"
+JACRED_URL = JACRED_URL.rstrip("?&")
 TORZNAB_NS = "http://torznab.com/schemas/2015/feed"
 
 TV_CATEGORIES = {5000, 5070}
@@ -55,14 +83,144 @@ SOURCE_INFLIGHT_LOCKS = {}
 # Global upstream limiter shared by all HTTP handler threads.
 RATE_LIMIT_LOCK = threading.Lock()
 UPSTREAM_REQUEST_LOCK = threading.Lock()
-LAST_UPSTREAM_START = 0.0
-UPSTREAM_BLOCK_UNTIL = 0.0
+LAST_UPSTREAM_COMPLETION = 0.0
 
 
 class UpstreamCoolingDown(Exception):
     def __init__(self, retry_after_seconds, message):
         super().__init__(message)
         self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
+PROTECTION_LOCK = threading.RLock()
+PROTECTION_FIELDS = (
+    "state", "block_until", "consecutive_429", "consecutive_403",
+    "consecutive_failures", "failure_reason", "recovery_stage",
+    "recovery_successes", "stable_successes", "manual_review", "updated_at",
+)
+
+
+def _protection_connection():
+    db_path = os.path.abspath(JACRED_STATE_PATH)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    connection = sqlite3.connect(db_path, timeout=10)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA synchronous=FULL")
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS upstream_protection (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            state TEXT NOT NULL,
+            block_until REAL NOT NULL DEFAULT 0,
+            consecutive_429 INTEGER NOT NULL DEFAULT 0,
+            consecutive_403 INTEGER NOT NULL DEFAULT 0,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            failure_reason TEXT NOT NULL DEFAULT '',
+            recovery_stage INTEGER NOT NULL DEFAULT 0,
+            recovery_successes INTEGER NOT NULL DEFAULT 0,
+            stable_successes INTEGER NOT NULL DEFAULT 0,
+            manual_review INTEGER NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO upstream_protection
+        (singleton, state, block_until, consecutive_429, consecutive_403,
+         consecutive_failures, failure_reason, recovery_stage,
+         recovery_successes, stable_successes, manual_review, updated_at)
+        VALUES (1, 'CLOSED', 0, 0, 0, 0, '', 0, 0, 0, 0, ?)
+        """,
+        (time.time(),),
+    )
+    connection.commit()
+    return connection
+
+
+def read_protection_state():
+    with PROTECTION_LOCK:
+        connection = _protection_connection()
+        try:
+            row = connection.execute(
+                "SELECT * FROM upstream_protection WHERE singleton = 1"
+            ).fetchone()
+            return dict(row)
+        finally:
+            connection.close()
+
+
+def update_protection_state(**updates):
+    allowed = set(PROTECTION_FIELDS) - {"updated_at"}
+    unexpected = set(updates) - allowed
+    if unexpected:
+        raise ValueError("Unexpected protection-state fields: " + ", ".join(sorted(unexpected)))
+
+    with PROTECTION_LOCK:
+        connection = _protection_connection()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM upstream_protection WHERE singleton = 1"
+            ).fetchone()
+            state = dict(row)
+            state.update(updates)
+            state["manual_review"] = int(bool(state["manual_review"]))
+            state["updated_at"] = time.time()
+            connection.execute(
+                """
+                UPDATE upstream_protection SET
+                    state = ?, block_until = ?, consecutive_429 = ?,
+                    consecutive_403 = ?, consecutive_failures = ?,
+                    failure_reason = ?, recovery_stage = ?,
+                    recovery_successes = ?, stable_successes = ?,
+                    manual_review = ?, updated_at = ?
+                WHERE singleton = 1
+                """,
+                tuple(state[field] for field in PROTECTION_FIELDS),
+            )
+            connection.commit()
+            return state
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+
+def reset_protection_state():
+    return update_protection_state(
+        state="CLOSED",
+        block_until=0,
+        consecutive_429=0,
+        consecutive_403=0,
+        consecutive_failures=0,
+        failure_reason="",
+        recovery_stage=0,
+        recovery_successes=0,
+        stable_successes=0,
+        manual_review=0,
+    )
+
+
+def initialize_protection_state():
+    state = read_protection_state()
+    if state["state"] == "HALF_OPEN":
+        # A process restart must never leave a phantom probe in progress.
+        # Keep the block intact and add a short safety pause before a new probe.
+        next_probe = max(float(state["block_until"] or 0), time.time() + JACRED_PROBE_FAILURE_SECONDS)
+        update_protection_state(
+            state="OPEN",
+            block_until=next_probe,
+            failure_reason=state["failure_reason"] or "service restarted during HALF_OPEN probe",
+        )
+        print(
+            "WARNING persisted HALF_OPEN state recovered as OPEN "
+            f"block_until={datetime.fromtimestamp(next_probe, timezone.utc).isoformat()}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def parse_retry_after(exc):
@@ -82,47 +240,354 @@ def parse_retry_after(exc):
     return float(JACRED_429_BACKOFF_SECONDS)
 
 
-def register_upstream_backoff(seconds, reason):
-    global UPSTREAM_BLOCK_UNTIL
-    seconds = max(1.0, float(seconds))
-    with RATE_LIMIT_LOCK:
-        UPSTREAM_BLOCK_UNTIL = max(
-            UPSTREAM_BLOCK_UNTIL,
-            time.monotonic() + seconds,
-        )
-        blocked_for = max(0.0, UPSTREAM_BLOCK_UNTIL - time.monotonic())
+def _safe_http_error_details(exc):
+    headers = getattr(exc, "headers", None)
+    safe_headers = {}
+    for name in ("Date", "Server", "Retry-After", "Content-Type", "CF-Ray", "X-Request-ID"):
+        value = clean(headers.get(name, "") if headers else "")
+        if value:
+            safe_headers[name.lower()] = value[:160]
+
+    try:
+        body = exc.read(512).decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
+    body = re.sub(r"\s+", " ", body).strip()
+    body = re.sub(
+        r"(?i)\b(api[_-]?key|token|authorization|cookie|password)\b\s*[:=]\s*[^ ,;]+",
+        r"\1=[REDACTED]",
+        body,
+    )[:300]
+    return safe_headers, body
+
+
+def register_http_429(retry_after_seconds, exc=None):
+    state = read_protection_state()
+    stage = int(state["consecutive_429"]) + 1
+    configured = JACRED_429_BACKOFF_STEPS_SECONDS[
+        min(stage - 1, len(JACRED_429_BACKOFF_STEPS_SECONDS) - 1)
+    ]
+    delay = max(float(configured), float(retry_after_seconds or 0))
+    now = time.time()
+    block_until = now + delay
+    reason = f"HTTP 429 (stage {stage})"
+    update_protection_state(
+        state="OPEN",
+        block_until=block_until,
+        consecutive_429=stage,
+        consecutive_failures=int(state["consecutive_failures"]) + 1,
+        failure_reason=reason,
+        recovery_stage=0,
+        recovery_successes=0,
+        stable_successes=0,
+        manual_review=state["manual_review"],
+    )
     print(
-        f"JACRED BACKOFF seconds={blocked_for:.1f} reason={reason}",
+        f"WARNING upstream circuit OPEN reason={reason} "
+        f"delay_seconds={delay:.0f} block_until={datetime.fromtimestamp(block_until, timezone.utc).isoformat()}",
         file=sys.stderr,
         flush=True,
     )
+    return UpstreamCoolingDown(math.ceil(delay), f"JacRed {reason}; all upstream requests paused")
+
+
+def register_http_403(exc):
+    state = read_protection_state()
+    count = int(state["consecutive_403"]) + 1
+    policy_delay = 86400 if count == 1 else 604800
+    try:
+        requested_delay = parse_retry_after(exc)
+    except Exception:
+        requested_delay = 0
+    delay = max(float(policy_delay), float(requested_delay))
+    now = time.time()
+    block_until = now + delay
+    manual_review = count >= 2
+    reason = "HTTP 403; manual review required" if manual_review else "HTTP 403; 24-hour protection block"
+    safe_headers, body_excerpt = _safe_http_error_details(exc)
+    update_protection_state(
+        state="OPEN",
+        block_until=block_until,
+        consecutive_403=count,
+        consecutive_failures=int(state["consecutive_failures"]) + 1,
+        failure_reason=reason,
+        recovery_stage=0,
+        recovery_successes=0,
+        stable_successes=0,
+        manual_review=manual_review,
+    )
+    print(
+        "CRITICAL upstream HTTP 403 "
+        f"timestamp={datetime.now(timezone.utc).isoformat()} "
+        f"headers={json.dumps(safe_headers, sort_keys=True)} "
+        f"body_excerpt={body_excerpt!r} "
+        f"block_until_utc={datetime.fromtimestamp(block_until, timezone.utc).isoformat()} "
+        f"manual_review={str(manual_review).lower()}",
+        file=sys.stderr,
+        flush=True,
+    )
+    message = "JacRed HTTP 403; upstream circuit OPEN"
+    if manual_review:
+        message += " for 7 days and then remains blocked pending manual review"
+    else:
+        message += " for at least 24 hours"
+    return UpstreamCoolingDown(math.ceil(delay), message)
+
+
+def register_http_401(exc):
+    state = read_protection_state()
+    safe_headers, body_excerpt = _safe_http_error_details(exc)
+    reason = "HTTP 401; manual authentication/configuration review required"
+    update_protection_state(
+        state="OPEN",
+        block_until=0,
+        consecutive_failures=int(state["consecutive_failures"]) + 1,
+        failure_reason=reason,
+        recovery_stage=0,
+        recovery_successes=0,
+        stable_successes=0,
+        manual_review=1,
+    )
+    print(
+        "CRITICAL upstream HTTP 401 "
+        f"timestamp={datetime.now(timezone.utc).isoformat()} "
+        f"headers={json.dumps(safe_headers, sort_keys=True)} "
+        f"body_excerpt={body_excerpt!r} manual_review=true",
+        file=sys.stderr,
+        flush=True,
+    )
+    return UpstreamCoolingDown(
+        max(86400, math.ceil(parse_retry_after(exc))),
+        "JacRed HTTP 401; upstream requests disabled until manual authentication/configuration review",
+    )
+
+
+def register_other_failure(reason, probe=False):
+    state = read_protection_state()
+    safe_reason = re.sub(r"\s+", " ", str(reason)).strip()[:240]
+    is_probe = bool(probe or state["state"] == "HALF_OPEN")
+    if is_probe:
+        block_until = time.time() + JACRED_PROBE_FAILURE_SECONDS
+        next_state = "OPEN"
+        safe_reason = "HALF_OPEN probe failed: " + safe_reason
+    else:
+        block_until = float(state["block_until"] or 0)
+        next_state = state["state"]
+    updated = update_protection_state(
+        state=next_state,
+        block_until=block_until,
+        consecutive_failures=int(state["consecutive_failures"]) + 1,
+        failure_reason=safe_reason,
+        recovery_stage=0,
+        recovery_successes=0,
+        stable_successes=0,
+        manual_review=state["manual_review"],
+    )
+    print(
+        f"ERROR upstream request failed reason={safe_reason!r} state={updated['state']} "
+        f"block_until={updated['block_until']:.0f}",
+        file=sys.stderr,
+        flush=True,
+    )
+    if is_probe:
+        return UpstreamCoolingDown(
+            JACRED_PROBE_FAILURE_SECONDS,
+            "JacRed recovery probe failed; upstream circuit temporarily OPEN",
+        )
+    return None
+
+
+def register_upstream_success(probe=False):
+    state = read_protection_state()
+    was_probe = bool(probe or state["state"] == "HALF_OPEN")
+    recovering = bool(
+        was_probe
+        or int(state["consecutive_429"])
+        or int(state["consecutive_403"])
+        or str(state["failure_reason"]).startswith("HALF_OPEN probe failed:")
+        or int(state["recovery_stage"])
+        or int(state["recovery_successes"])
+    )
+
+    if was_probe:
+        recovery_stage = 0
+        recovery_successes = 0
+    elif recovering:
+        recovery_stage = int(state["recovery_stage"])
+        recovery_successes = int(state["recovery_successes"]) + 1
+        if recovery_successes >= JACRED_RECOVERY_SUCCESS_COUNT:
+            recovery_stage = min(recovery_stage + 1, len(JACRED_RECOVERY_INTERVALS_SECONDS) - 1)
+            recovery_successes = 0
+    else:
+        # Ordinary successful requests in CLOSED do not count as recovery
+        # progress and must not activate the 60-second recovery interval.
+        recovery_stage = 0
+        recovery_successes = 0
+
+    stable_successes = int(state["stable_successes"]) + 1
+    clear_escalation = stable_successes >= JACRED_STABLE_SUCCESS_COUNT
+    if clear_escalation:
+        stable_successes = 0
+
+    updated = update_protection_state(
+        state="CLOSED",
+        block_until=0,
+        consecutive_failures=0,
+        failure_reason="" if clear_escalation else state["failure_reason"],
+        consecutive_429=0 if clear_escalation else state["consecutive_429"],
+        consecutive_403=0 if clear_escalation else state["consecutive_403"],
+        recovery_stage=recovery_stage,
+        recovery_successes=recovery_successes,
+        stable_successes=stable_successes,
+        manual_review=0,
+    )
+    if was_probe:
+        print(
+            "WARNING recovery probe succeeded; gradual recovery begins "
+            f"interval_seconds={JACRED_RECOVERY_INTERVALS_SECONDS[0]}",
+            file=sys.stderr,
+            flush=True,
+        )
+    elif recovering and recovery_stage != int(state["recovery_stage"]):
+        print(
+            f"INFO gradual recovery advanced stage={recovery_stage + 1}/"
+            f"{len(JACRED_RECOVERY_INTERVALS_SECONDS)} "
+            f"interval_seconds={JACRED_RECOVERY_INTERVALS_SECONDS[recovery_stage]}",
+            file=sys.stderr,
+            flush=True,
+        )
+    if clear_escalation and (
+        int(state["consecutive_429"]) or int(state["consecutive_403"]) or state["failure_reason"]
+    ):
+        print(
+            "INFO upstream protection escalation cleared after "
+            f"{JACRED_STABLE_SUCCESS_COUNT} stable successful requests",
+            file=sys.stderr,
+            flush=True,
+        )
+    return updated
+
+
+
+def begin_upstream_attempt():
+    state = read_protection_state()
+    now = time.time()
+    if state["manual_review"]:
+        raise UpstreamCoolingDown(
+            86400,
+            "JacRed upstream is blocked pending manual review; no automatic probe is allowed",
+        )
+
+    if state["state"] == "OPEN":
+        remaining = float(state["block_until"] or 0) - now
+        if remaining > 0:
+            raise UpstreamCoolingDown(
+                math.ceil(remaining),
+                f"JacRed upstream circuit OPEN: {state['failure_reason'] or 'cooldown active'}",
+            )
+        with PROTECTION_LOCK:
+            latest = read_protection_state()
+            if latest["manual_review"]:
+                raise UpstreamCoolingDown(
+                    86400,
+                    "JacRed upstream is blocked pending manual review",
+                )
+            if latest["state"] != "OPEN" or float(latest["block_until"] or 0) > time.time():
+                raise UpstreamCoolingDown(
+                    max(1, math.ceil(float(latest["block_until"] or time.time() + JACRED_PROBE_FAILURE_SECONDS) - time.time())),
+                    "JacRed upstream circuit changed while waiting for a slot",
+                )
+            update_protection_state(
+                state="HALF_OPEN",
+                failure_reason=latest["failure_reason"] or "controlled recovery probe",
+            )
+        print(
+            "WARNING upstream circuit HALF_OPEN; permitting exactly one controlled probe",
+            file=sys.stderr,
+            flush=True,
+        )
+        return True
+
+    if state["state"] == "HALF_OPEN":
+        # A concurrent request may have passed the initial queue check while
+        # another thread claimed the sole probe. Never permit a second probe.
+        raise UpstreamCoolingDown(
+            JACRED_PROBE_FAILURE_SECONDS,
+            "JacRed recovery probe is already in progress",
+        )
+    return False
 
 
 def wait_for_upstream_slot(deadline):
-    global LAST_UPSTREAM_START
+    global LAST_UPSTREAM_COMPLETION
 
-    while True:
-        with RATE_LIMIT_LOCK:
-            now = time.monotonic()
-            next_slot = max(
-                LAST_UPSTREAM_START + JACRED_MIN_INTERVAL_MS / 1000.0,
-                UPSTREAM_BLOCK_UNTIL,
+    state = read_protection_state()
+    now_wall = time.time()
+    if state["manual_review"]:
+        raise UpstreamCoolingDown(
+            86400,
+            "JacRed upstream is blocked pending manual review",
+        )
+
+    probe_candidate = state["state"] == "OPEN"
+    if probe_candidate:
+        remaining_block = float(state["block_until"] or 0) - now_wall
+        if remaining_block > 0:
+            raise UpstreamCoolingDown(
+                math.ceil(remaining_block),
+                f"JacRed upstream circuit OPEN: {state['failure_reason'] or 'cooldown active'}",
             )
-            delay = next_slot - now
-            if delay <= 0:
-                LAST_UPSTREAM_START = now
-                return
+    elif state["state"] == "HALF_OPEN":
+        raise UpstreamCoolingDown(
+            JACRED_PROBE_FAILURE_SECONDS,
+            "JacRed recovery probe is already in progress",
+        )
 
-            remaining_budget = deadline - now
-            if remaining_budget <= 0 or delay > remaining_budget:
-                retry_after = max(1, int(delay + 0.999))
-                raise UpstreamCoolingDown(
-                    retry_after,
-                    f"JacRed request deferred for {delay:.1f}s; "
-                    f"maximum queue wait is {JACRED_MAX_QUEUE_WAIT_SECONDS}s",
-                )
+    if probe_candidate:
+        # One eligible request may probe after the persisted cooldown expires.
+        interval_seconds = JACRED_MIN_INTERVAL_MS / 1000.0
+    else:
+        # Recovery pacing applies only after a rate-limit/access block or
+        # a failed HALF_OPEN probe. A transient ordinary 5xx/timeout must not
+        # accidentally switch every subsequent request to the 60-second step.
+        recovering = bool(
+            int(state["consecutive_429"])
+            or int(state["consecutive_403"])
+            or str(state["failure_reason"]).startswith("HALF_OPEN probe failed:")
+            or int(state["recovery_stage"])
+            or int(state["recovery_successes"])
+        )
+        if recovering:
+            stage = min(
+                int(state["recovery_stage"]),
+                len(JACRED_RECOVERY_INTERVALS_SECONDS) - 1,
+            )
+            interval_seconds = max(
+                JACRED_MIN_INTERVAL_MS / 1000.0,
+                float(JACRED_RECOVERY_INTERVALS_SECONDS[stage]),
+            )
+        else:
+            # Normal CLOSED operation uses the configured floor (default 5 s),
+            # not the slower first step reserved for circuit recovery.
+            interval_seconds = JACRED_MIN_INTERVAL_MS / 1000.0
 
+    with RATE_LIMIT_LOCK:
+        now_mono = time.monotonic()
+        delay = LAST_UPSTREAM_COMPLETION + interval_seconds - now_mono
+
+    if delay > 0:
+        remaining_budget = deadline - now_mono
+        if remaining_budget <= 0 or delay > remaining_budget:
+            raise UpstreamCoolingDown(
+                max(1, math.ceil(delay)),
+                f"JacRed request deferred for {delay:.1f}s; "
+                f"maximum queue wait is {JACRED_MAX_QUEUE_WAIT_SECONDS}s",
+            )
         time.sleep(delay)
+
+    # Claim HALF_OPEN only after a slot can be granted. The global request lock
+    # prevents another adapter thread from issuing a concurrent probe.
+    return begin_upstream_attempt()
 
 
 def log_request_diagnostics(params, key):
@@ -827,7 +1292,7 @@ def item_matches_categories(item, requested, media_type):
 # ----------------------------------------------------------------
 
 def query_jacred(query, year, media_type):
-    global LAST_UPSTREAM_START
+    global LAST_UPSTREAM_COMPLETION
 
     params = {
         "q": query,
@@ -836,17 +1301,19 @@ def query_jacred(query, year, media_type):
     }
     if year:
         params["year"] = year
-    url = JACRED_URL + "?" + urllib.parse.urlencode(params)
+    separator = "&" if "?" in JACRED_URL else "?"
+    url = JACRED_URL + separator + urllib.parse.urlencode(params)
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": f"JacRed-V2-Torznab-Adapter/{VERSION}",
+            "User-Agent": JACRED_USER_AGENT,
             "Accept": "application/json",
         },
     )
 
-    # Serialize all upstream calls, then pace starts relative to the previous
-    # call's completion. The wait budget includes time spent queued on this lock.
+    # One global lock serializes every outbound query and all title/media variants.
+    # The queue budget includes time spent waiting for that lock and for the
+    # completion-based quiet interval.
     deadline = time.monotonic() + JACRED_MAX_QUEUE_WAIT_SECONDS
     acquired = UPSTREAM_REQUEST_LOCK.acquire(
         timeout=max(0.0, deadline - time.monotonic())
@@ -858,24 +1325,58 @@ def query_jacred(query, year, media_type):
         )
 
     try:
-        wait_for_upstream_slot(deadline)
+        probe = wait_for_upstream_slot(deadline)
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 data = json.loads(response.read().decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("JacRed JSON response must be an object")
+            results = data.get("Results") or []
+            if not isinstance(results, list):
+                raise ValueError("JacRed JSON field Results must be a list")
+            return [item for item in results if isinstance(item, dict)]
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
-                register_upstream_backoff(
-                    parse_retry_after(exc),
-                    "HTTP 429",
-                )
+                retry_after = parse_retry_after(exc)
+                raise register_http_429(retry_after, exc) from exc
+            if exc.code == 403:
+                raise register_http_403(exc) from exc
+            if exc.code == 401:
+                raise register_http_401(exc) from exc
+            cooling = register_other_failure(
+                f"HTTP {exc.code} {clean(exc.reason)}",
+                probe,
+            )
+            if cooling:
+                raise cooling from exc
+            raise
+        except Exception as exc:
+            # Circuit-control exceptions are not upstream failures and must
+            # not overwrite the persisted OPEN/HALF_OPEN state.
+            if isinstance(exc, UpstreamCoolingDown):
+                raise
+            cooling = register_other_failure(
+                f"{type(exc).__name__}: {exc}",
+                probe,
+            )
+            if cooling:
+                raise cooling from exc
             raise
         finally:
             with RATE_LIMIT_LOCK:
-                LAST_UPSTREAM_START = time.monotonic()
+                LAST_UPSTREAM_COMPLETION = time.monotonic()
+            # Count only a completed, valid JSON response as an upstream success.
+            # An error must never clear the active block or failure escalation.
+            if "data" in locals() and isinstance(data, dict) and isinstance(data.get("Results") or [], list):
+                register_upstream_success(probe)
+            elif probe:
+                # A failed recovery probe must leave the circuit OPEN, even for
+                # transport errors or malformed JSON that are not HTTP status codes.
+                state = read_protection_state()
+                if state["state"] == "HALF_OPEN":
+                    register_other_failure("recovery probe failed before a valid response", probe=True)
     finally:
         UPSTREAM_REQUEST_LOCK.release()
-
-    return [x for x in (data.get("Results") or []) if isinstance(x, dict)]
 
 
 def parse_publish_date(value):
@@ -950,7 +1451,7 @@ def make_feed(results):
     rss = ET.Element("rss", version="2.0", **{"xmlns:torznab": TORZNAB_NS})
     channel = ET.SubElement(rss, "channel")
     add_text(channel, "title", SERVER_TITLE)
-    add_text(channel, "link", "https://jac.red/")
+    add_text(channel, "link", JACRED_URL)
     add_text(channel, "description", "JacRed v2 TV + Movies JSON to Torznab adapter")
 
     for item, media_type in results:
@@ -1227,6 +1728,10 @@ class Handler(BaseHTTPRequestHandler):
                                     file=sys.stderr,
                                     flush=True,
                                 )
+                    except UpstreamCoolingDown:
+                        # A circuit-open/cooldown condition is fatal for this
+                        # operation: do not start remaining branches or aliases.
+                        raise
                     except Exception as exc:
                         errors.append((media_type, exc))
                         print(
@@ -1315,8 +1820,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--reset-upstream-protection":
+        reset_protection_state()
+        print(f"Upstream protection state reset to CLOSED in {JACRED_STATE_PATH}", flush=True)
+        sys.exit(0)
+
+    initialize_protection_state()
     print(
-        f"{SERVER_TITLE} v{VERSION} listening on http://{HOST}:{PORT}/torznab",
+        f"{SERVER_TITLE} v{VERSION} listening on http://{HOST}:{PORT}/torznab; "
+        f"JacRed source={JACRED_URL}; minimum interval={JACRED_MIN_INTERVAL_MS}ms; "
+        f"state={JACRED_STATE_PATH}",
         flush=True,
     )
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
