@@ -21,7 +21,11 @@ class HdrCollectorTests(unittest.TestCase):
             "Title": "Lanterns S01E01 2160p HDR10+",
             "MagnetUri": f"magnet:?xt=urn:btih:{infohash}&dn=sample",
             "Details": "https://tracker.example/details/123",
-            "info": {"videotype": "HDR10+", "page_url": "https://example.invalid/release"},
+            "info": {
+                "videotype": "HDR10+",
+                "page_url": "https://example.invalid/release",
+                "note": "mirror https://mirror.example/item",
+            },
         }
         redactions = {}
         cleaned = collector.make_sanitized_release(release, 1, redactions)
@@ -34,7 +38,10 @@ class HdrCollectorTests(unittest.TestCase):
         self.assertNotIn("page_url", cleaned["info"])
         self.assertNotIn("magnet:", serialized)
         self.assertNotIn("tracker.example", serialized)
+        self.assertNotIn("mirror.example", serialized)
+        self.assertEqual(cleaned["info"]["note"], "mirror [REDACTED_URL]")
         self.assertIn("info.page_url", redactions)
+        self.assertIn("info.note", redactions)
 
     def test_field_schema_profiles_nested_ffprobe_fields(self):
         records = [
