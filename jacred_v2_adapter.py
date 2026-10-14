@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.3.1"
+VERSION = "2.4.0"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -875,26 +875,70 @@ def normalize_quality_value(value):
     return ""
 
 
-def hdr_marker(item, source_title):
-    info = item.get("info") or {}
-    text = " ".join(clean(v) for v in (info.get("videotype"), info.get("video_type"), source_title)).lower()
-    return "HDR" if (
-        re.search(r"\bhdr10?\+?\b", text)
-        or re.search(r"\bdolby\s+vision\b", text)
-        or re.search(r"\bdv\b", text)
-        or re.search(r"\bhdr\b", text)
-    ) else ""
+def hdr_markers(source_title):
+    """Return canonical HDR/SDR labels found in the original release title only.
+
+    JacRed's current result schema exposes a generic info.videotype value but
+    no reliable fields for distinguishing HDR10, HDR10+ and Dolby Vision.
+    Therefore these labels are title-derived hints, not verified media facts.
+    """
+    text = clean(source_title)
+    if not text:
+        return []
+
+    hdr10_plus = bool(re.search(r"(?i)(?<!\w)HDR\s*10\s*(?:\+|PLUS)(?!\w)", text))
+    hdr10 = bool(re.search(r"(?i)(?<!\w)HDR\s*10(?!\s*(?:\+|PLUS)|\w)", text))
+    generic_hdr = bool(re.search(r"(?i)(?<!\w)HDR(?!\w)", text))
+    explicit_dolby_vision = bool(
+        re.search(r"(?i)(?<!\w)DOLBY[\s._-]*VISION(?!\w)", text)
+        or re.search(r"(?i)(?<!\w)DOVI(?!\w)", text)
+    )
+
+    # "DV" is overloaded, so accept it only when paired with a Dolby Vision
+    # profile/version or another strong HDR/UHD marker in the same title.
+    dv_token = bool(re.search(r"(?i)(?<!\w)DV(?!\w)", text))
+    dv_profile = bool(re.search(r"(?i)(?<!\w)DV\s*(?:P\s*)?\d+(?:\.\d+)?(?!\w)", text))
+    dv_context = bool(
+        hdr10_plus
+        or hdr10
+        or generic_hdr
+        or re.search(r"(?i)(?<!\w)(?:4K|UHD|2160P|4320P|10[ -]?BIT)(?!\w)", text)
+    )
+    dolby_vision = explicit_dolby_vision or (dv_token and (dv_profile or dv_context))
+
+    markers = []
+    if hdr10:
+        markers.append("HDR10")
+    if hdr10_plus:
+        markers.append("HDR10+")
+    if dolby_vision:
+        markers.append("Dolby Vision")
+
+    # A generic HDR label is useful only when the title does not name a
+    # more specific HDR format. Do not infer HDR10+ from a bare "HDR+" token.
+    if not markers and generic_hdr:
+        markers.append("HDR")
+
+    # Keep an explicit SDR marker only when the title contains no HDR marker.
+    # If a title is internally contradictory, do not emit both classifications.
+    if not markers and re.search(r"(?i)(?<!\w)SDR(?!\w)", text):
+        markers.append("SDR")
+
+    return markers
 
 
 def extract_actual_quality(item, source_title):
-    # Priority: ffprobe -> JacRed info.quality -> title.
+    # Quality: ffprobe dimensions -> JacRed info.quality -> title.
+    # HDR subtype labels are deliberately title-only; info.videotype and
+    # codec/resolution are not evidence for HDR10 vs HDR10+ vs Dolby Vision.
     video = first_video_stream(item.get("ffprobe") or [])
     quality = resolution_class(video.get("width"), video.get("height")) if video else ""
     if not quality:
         quality = normalize_quality_value((item.get("info") or {}).get("quality"))
     if not quality:
         quality = normalize_quality_value(source_title)
-    return quality + " HDR" if quality == "2160p" and hdr_marker(item, source_title) else quality
+    labels = hdr_markers(source_title)
+    return " ".join(part for part in [quality, *labels] if part)
 
 
 def actual_resolution(item):
