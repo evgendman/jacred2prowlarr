@@ -231,6 +231,10 @@ sudo systemctl start jacred-v2-adapter.service
 Replace the service account and interpreter path if your unit uses different values. Resetting the state does not probe JacRed or establish that the source is reachable.
 
 
+## HDR metadata collection utility
+
+The repository includes a local-only diagnostic collector for inspecting which HDR-related fields the configured JacRed instance returns. It defaults to Lanterns (2026), makes one request, removes links from saved output, and generates a field schema plus a ZIP archive. See [HDR data collection instructions](docs/hdr-data-collection.md).
+
 ## Deployment
 
 The existing systemd unit is:
