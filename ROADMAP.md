@@ -2,7 +2,7 @@
 
 [English documentation](README.md) | [Документация на русском](README.ru.md)
 
-Current release on MINI-Ubuntu: **2.3.1** (installed 2026-10-13); CI-verified commit: `a1e7f30f14e75095cef15b1e5e7b73721b837b15`
+Current release on MINI-Ubuntu: **2.4.0** (installed and validated 2026-10-14); source commit: [`bcaf416d83b86041cd0049da90dddb33c53e1bb4`](https://github.com/evgendman/jacred2prowlarr/commit/bcaf416d83b86041cd0049da90dddb33c53e1bb4); [CI run #30 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/38595960157) (Python compilation and all 32 tests).
 
 ## Project goal
 
@@ -41,18 +41,19 @@ The following scenarios have been manually tested during development:
   - `Секретные материалы (1-11 сезоны: 1-217 серии из 217) / The X-Files / 1993-2018` → `S01-S11`
   - `Секретные материалы 6 сезон (1-22 из 22) / The X-Files (1998-1999)` → `S06E01-22`
   - `The X-Files S11E01-10 WEB-DL 1080p` → `S11E01-10`
-
-These checks confirm the listed scenarios; they do not substitute for validation of every combination of client, quality tier, indexer category and source error condition.
+- **v2.4.0 live validation (2026-10-14):** CI run [#30](https://github.com/evgendman/jacred2prowlarr/actions/runs/38595960157) passed Python compilation and all 32 tests. On MINI-Ubuntu, the v2.4.0 service is active, startup logs confirm the local JacRed upstream at `127.0.0.1:9117` and a 1000 ms minimum interval, and Torznab `t=caps` returns HTTP 200. A live `tvsearch` for `Lanterns` returned HTTP 200 and 100 releases; 29 returned normalized HDR/SDR/Dolby Vision markers. The user confirmed searches and the relevant behavior work in both Sonarr and Radarr.
 
 ## Remaining end-to-end validation
 
-1. Complete the full intended topology test with the shared adapter and all configured clients:
+The v2.4.0 release and its HDR-specific acceptance checks are complete. The items below are additional coverage for the wider deployment, not blockers for the verified v2.4.0 behavior.
+
+1. **Complete the full configured-client matrix.** A real search and the relevant HDR behavior have been verified by the user in Sonarr and Radarr. The roadmap does not yet record an explicit per-instance check of every configured path:
    - Prowlarr;
    - Sonarr 1080p and 4K;
    - Radarr 1080p and 4K.
-2. For the same title searched by multiple clients/quality tiers, confirm the raw source-result cache prevents redundant identical JacRed queries and that distinct local filters still produce correct, independent pages.
-3. Verify actual end-to-end automatic selection with the intended Custom Formats, including preferred voice/dubbing scores as well as resolution, source format and HDR. The adapter exposes these signals; scoring policy belongs to Sonarr/Radarr.
-4. Implement and test upstream failure handling against a local mock HTTP source: HTTP 429 and both `Retry-After` formats, HTTP 403, HTTP 401, a busy queue, timeouts, and partial movie/TV branch failures. Do not use public JacRed to generate failure cases. Any real-source recovery check must be a single controlled attempt after the protection period.
+2. **Cross-client/cache regression.** For the same title searched by multiple clients and quality tiers, verify that the shared raw-source cache avoids redundant identical JacRed queries while distinct local filters still produce correct independent result pages.
+3. **Combined automatic selection.** HDR title normalization and the relevant Sonarr/Radarr behavior have been checked. The broader combined ranking path still needs an explicitly recorded end-to-end case covering preferred voice/dubbing scores together with resolution, source format and HDR. Scoring policy belongs to Sonarr/Radarr.
+4. **Remaining mock-upstream failure cases.** The automated suite already covers HTTP 429 and both `Retry-After` formats, HTTP 403/401, persisted protection state, single HALF_OPEN probing, cache behavior while OPEN, serialized requests and a combined-search abort on 403. Add explicit local-mock cases for queue-wait expiration/HTTP 503, upstream timeouts, and partial movie/TV branch failures. Do not use public JacRed to generate failure cases. Any real-source recovery check must be a single controlled attempt after the protection period.
 
 ## v2.4.0: title-only HDR label normalization
 
@@ -65,7 +66,7 @@ Version 2.4.0 deliberately bases HDR/SDR label normalization **only on the origi
 - [x] Normalize specific markers into a stable order and preserve combined explicit markers, e.g. `HDR10+ Dolby Vision`.
 - [x] Append title-derived markers to normalized quality at all resolutions, not only 2160p, while continuing to preserve the original source title after `***`.
 - [x] Add fixture-style unit tests for label parsing, ambiguous `DV`, SDR, missing structured evidence, and normalized output titles.
-- [ ] After deployment, verify representative title output through the local Torznab endpoint and test Custom Format matching in Sonarr/Radarr.
+- [x] Deployment and integration: representative output was verified through the local Torznab endpoint; the `Lanterns` query returned HTTP 200 and included normalized `HDR10+`, `Dolby Vision`, generic `HDR` and `SDR` labels. The user confirmed the relevant search/Custom Format behavior works in Sonarr and Radarr.
 
 The labels remain **title-derived hints**, not claims that the video stream has been independently inspected. A generic `HDR` label is emitted only when the title does not specify a more concrete HDR type; `HDR+` alone is not promoted to `HDR10+`. Details and examples: [English policy](docs/hdr-title-normalization.md) and [Russian policy](docs/hdr-title-normalization.ru.md).
 
