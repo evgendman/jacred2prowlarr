@@ -4,7 +4,7 @@
 
 **JacRed v2 JSON → Torznab adapter for Prowlarr, Sonarr and Radarr.**
 
-Current version: **2.3.1 (candidate)**
+Current version: **2.3.1**
 
 The adapter turns JacRed's Russian-tracker release data into consistent Torznab results that the *Arr applications can parse and rank more reliably. It is intended to bridge two gaps: Russian release titles do not always follow the naming patterns expected by Sonarr/Radarr, and a direct indexer connectivity test may fail when the upstream returns no real result for an empty search.
 
