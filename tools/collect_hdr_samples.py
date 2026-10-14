@@ -40,6 +40,7 @@ SENSITIVE_KEY_RE = re.compile(
 )
 INFOHASH_HEX_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 INFOHASH_BASE32_RE = re.compile(r"^[A-Z2-7a-z2-7]{32}$")
+URL_VALUE_RE = re.compile(r"(?i)(?:magnet:\?\S+|https?://\S+)")
 
 HDR10_PLUS_RE = re.compile(r"\bhdr[\s._-]*10(?:\s*\+|\s*plus)", re.IGNORECASE)
 HDR10_RE = re.compile(r"\bhdr[\s._-]*10\b", re.IGNORECASE)
@@ -121,6 +122,11 @@ def sanitize_value(
         return cleaned
     if isinstance(value, list):
         return [sanitize_value(child, f"{path}[]", redactions) for child in value]
+    if isinstance(value, str):
+        cleaned = URL_VALUE_RE.sub("[REDACTED_URL]", value)
+        if cleaned != value:
+            note_redaction(redactions, path or "<root>", "url-valued string")
+        return cleaned
     return value
 
 
@@ -202,6 +208,9 @@ def walk_field_schema(
         if isinstance(value, (str, int, float, bool)) or value is None:
             sample = value
             if isinstance(sample, str):
+                if URL_VALUE_RE.search(sample):
+                    note_redaction(redactions, path, "url-valued string")
+                    sample = URL_VALUE_RE.sub("[REDACTED_URL]", sample)
                 sample = sample.replace("\n", " ").replace("\r", " ")[:120]
             sample_key = json.dumps(sample, ensure_ascii=False, sort_keys=True)
             if sample_key not in record["_sample_set"] and len(record["samples"]) < 5:
