@@ -75,7 +75,7 @@ class HDRTitleNormalizationTests(unittest.TestCase):
         self.assertIn("*** " + source, title)
 
     def test_normalized_movie_title_preserves_original_source_title(self):
-        source = "Example Movie (2024) WEB-DL 2160p HDR10"
+        source = "Example Movie (2024) WEB-DL 2160p HDR10 | Director's Cut"
         item = {
             "Title": source,
             "info": {
