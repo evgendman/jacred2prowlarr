@@ -58,6 +58,9 @@ These checks confirm the listed scenarios; they do not substitute for validation
 
 The current adapter uses a broad text-marker check and can collapse different HDR types into a single generic `HDR` label. Before changing production behavior, verify what the locally deployed JacRed API actually provides for real releases, then implement only distinctions supported by the evidence.
 
+- [x] Add `tools/collect_hdr_samples.py`, a local-loopback-only collector that makes one bounded query, removes magnet/URL/credential-like values, and writes sanitized release samples, field-presence statistics, HDR text-marker observations and a ZIP archive. Instructions: [HDR data collection](docs/hdr-data-collection.md).
+- [ ] Run the collector on MINI-Ubuntu for `Lanterns` (2026), inspect the returned `summary.md`, `field_schema.json` and `sanitized_releases.jsonl`, and select representative records for HDR fixture tests. If the filtered query is empty, make one separate local-only query without the year filter.
+
 - [ ] Record the running local JacRed version and inspect representative API search results from the configured local endpoint. Use existing local data and controlled requests; do not send repeated probes to the public JacRed endpoint.
 - [ ] Collect examples whose HDR type is independently known: SDR, HDR10, HDR10+, Dolby Vision, and combinations such as Dolby Vision with HDR10/HDR10+ fallback where available.
 - [ ] Inspect the fields actually returned by JacRed, including `info.videotype`, `info.video_type`, the `ffprobe` video-stream data, color primaries/transfer characteristics, pixel format and `side_data_list` or other Dolby Vision configuration/metadata fields. Confirm which fields are consistently present; do not assume any field exists until observed in the running API response.
