@@ -886,23 +886,23 @@ def hdr_markers(source_title):
     if not text:
         return []
 
-    hdr10_plus = bool(re.search(r"(?i)(?<!\\w)HDR\\s*10\\s*(?:\\+|PLUS)(?!\\w)", text))
-    hdr10 = bool(re.search(r"(?i)(?<!\\w)HDR\\s*10(?!\\s*(?:\\+|PLUS)|\\w)", text))
-    generic_hdr = bool(re.search(r"(?i)(?<!\\w)HDR(?!\\w)", text))
+    hdr10_plus = bool(re.search(r"(?i)(?<!\w)HDR\s*10\s*(?:\+|PLUS)(?!\w)", text))
+    hdr10 = bool(re.search(r"(?i)(?<!\w)HDR\s*10(?!\s*(?:\+|PLUS)|\w)", text))
+    generic_hdr = bool(re.search(r"(?i)(?<!\w)HDR(?!\w)", text))
     explicit_dolby_vision = bool(
-        re.search(r"(?i)(?<!\\w)DOLBY[\\s._-]*VISION(?!\\w)", text)
-        or re.search(r"(?i)(?<!\\w)DOVI(?!\\w)", text)
+        re.search(r"(?i)(?<!\w)DOLBY[\s._-]*VISION(?!\w)", text)
+        or re.search(r"(?i)(?<!\w)DOVI(?!\w)", text)
     )
 
     # "DV" is overloaded, so accept it only when paired with a Dolby Vision
     # profile/version or another strong HDR/UHD marker in the same title.
-    dv_token = bool(re.search(r"(?i)(?<!\\w)DV(?!\\w)", text))
-    dv_profile = bool(re.search(r"(?i)(?<!\\w)DV\\s*(?:P\\s*)?\\d+(?:\\.\\d+)?(?!\\w)", text))
+    dv_token = bool(re.search(r"(?i)(?<!\w)DV(?!\w)", text))
+    dv_profile = bool(re.search(r"(?i)(?<!\w)DV\s*(?:P\s*)?\d+(?:\.\d+)?(?!\w)", text))
     dv_context = bool(
         hdr10_plus
         or hdr10
         or generic_hdr
-        or re.search(r"(?i)(?<!\\w)(?:4K|UHD|2160P|4320P|10[ -]?BIT)(?!\\w)", text)
+        or re.search(r"(?i)(?<!\w)(?:4K|UHD|2160P|4320P|10[ -]?BIT)(?!\w)", text)
     )
     dolby_vision = explicit_dolby_vision or (dv_token and (dv_profile or dv_context))
 
@@ -921,7 +921,7 @@ def hdr_markers(source_title):
 
     # Keep an explicit SDR marker only when the title contains no HDR marker.
     # If a title is internally contradictory, do not emit both classifications.
-    if not markers and re.search(r"(?i)(?<!\\w)SDR(?!\\w)", text):
+    if not markers and re.search(r"(?i)(?<!\w)SDR(?!\w)", text):
         markers.append("SDR")
 
     return markers
