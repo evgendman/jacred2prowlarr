@@ -54,6 +54,20 @@ These checks confirm the listed scenarios; they do not substitute for validation
 3. Verify actual end-to-end automatic selection with the intended Custom Formats, including preferred voice/dubbing scores as well as resolution, source format and HDR. The adapter exposes these signals; scoring policy belongs to Sonarr/Radarr.
 4. Implement and test upstream failure handling against a local mock HTTP source: HTTP 429 and both `Retry-After` formats, HTTP 403, HTTP 401, a busy queue, timeouts, and partial movie/TV branch failures. Do not use public JacRed to generate failure cases. Any real-source recovery check must be a single controlled attempt after the protection period.
 
+### Planned: verify HDR metadata and replace the generic HDR label
+
+The current adapter uses a broad text-marker check and can collapse different HDR types into a single generic `HDR` label. Before changing production behavior, verify what the locally deployed JacRed API actually provides for real releases, then implement only distinctions supported by the evidence.
+
+- [ ] Record the running local JacRed version and inspect representative API search results from the configured local endpoint. Use existing local data and controlled requests; do not send repeated probes to the public JacRed endpoint.
+- [ ] Collect examples whose HDR type is independently known: SDR, HDR10, HDR10+, Dolby Vision, and combinations such as Dolby Vision with HDR10/HDR10+ fallback where available.
+- [ ] Inspect the fields actually returned by JacRed, including `info.videotype`, `info.video_type`, the `ffprobe` video-stream data, color primaries/transfer characteristics, pixel format and `side_data_list` or other Dolby Vision configuration/metadata fields. Confirm which fields are consistently present; do not assume any field exists until observed in the running API response.
+- [ ] Determine which combinations can be distinguished reliably from structured metadata and which can only be inferred from the original release title. Document false-positive and missing-metadata cases.
+- [ ] Based on the test results, update the adapter's title-normalization logic to emit specific, consistent markers such as `HDR10`, `HDR10+` and `Dolby Vision` (including a combined label only when both are supported by evidence), instead of assigning the generic `HDR` marker to every detected HDR-like token.
+- [ ] Preserve the original source release title after `***` and keep the fallback conservative: a generic marker in the source name must not be presented as confirmed HDR10+ or Dolby Vision. Do not claim a Dolby Vision profile or HDR10 fallback unless available metadata supports it.
+- [ ] Add fixture-based tests from sanitized API examples for each supported type and combination, including missing or conflicting metadata, and validate the rendered Torznab titles plus Custom Format matching in Radarr/Sonarr.
+
+Acceptance criteria: each emitted specific label must be backed by observed and tested evidence; unknown HDR must remain unknown/generic rather than being incorrectly promoted to HDR10, HDR10+ or Dolby Vision.
+
 ## v2.3.0: local source and persistent upstream protection
 
 **v2.3.0 baseline validation as of 2026-10-13:** GitHub Actions run #12 passed Python compilation and all 17 mock-upstream tests on commit `025a0a57911cb5bd06d8c1c85a7c3425be8e5b79`. This validation applies to the 2.3.0 baseline; the 2.3.1 interval change requires its own CI run.
@@ -136,7 +150,7 @@ Adjust the service account and interpreter path to match the actual unit. Resett
 - TV parent category `5000` and Anime subcategory `5070`; movie parent `2000` and supported movie source categories `2010, 2020, 2030, 2040, 2045, 2050, 2060, 2070, 2080, 2090`.
 - Movie and TV records use separate title-formatting branches.
 - Movie subcategory filtering does not discard a release merely because JacRed only supplied its parent category; unsupported source details are not invented.
-- Quality detection priority: ffprobe dimensions → JacRed `info.quality` → release title. Exposes HDR for 2160p when supported markers are present, and video resolution/codec metadata when available.
+- Quality detection priority: ffprobe dimensions → JacRed `info.quality` → release title. Video resolution/codec metadata may be exposed when available. HDR handling is currently rudimentary: several HDR-like markers can collapse to the generic `HDR` label; specific HDR10 / HDR10+ / Dolby Vision classification is not yet implemented and is tracked under Remaining end-to-end validation.
 - Voice metadata is taken in priority order from Russian audio-stream tags in ffprobe, JacRed `info.voices`, or supported MVO patterns in the source title. Available language information is also exposed in Torznab metadata.
 - Formatted title retains the original source title after `***` when it differs from the normalized title, and the original title is also the Torznab description.
 - Standard torrent enclosure MIME type, magnet URL, infohash and source date parsing.
