@@ -119,7 +119,7 @@ Adjust the service account and interpreter path to match the actual unit. Resett
 
 ### v2.3.1 deployment validation — completed
 
-- [x] CI: Python compilation and the full mock-upstream test job passed for candidate commit `a1e7f30f14e75095cef15b1e5e7b73721b837b15`.
+- [x] CI: Python compilation and the full mock-upstream test job passed for the v2.3.1 release source commit `a1e7f30f14e75095cef15b1e5e7b73721b837b15`.
 - [x] Runtime: installed service is `active` and `enabled`; startup confirms `v2.3.1` and `minimum interval=1000ms`.
 - [x] Config: `JACRED_URL` remains the local JSON endpoint at `127.0.0.1:9117`; `JACRED_STATE_PATH` and the existing SQLite state were preserved.
 - [x] Torznab: capabilities and synthetic movie test return HTTP 200.
