@@ -70,6 +70,37 @@ Version 2.4.0 deliberately bases HDR/SDR label normalization **only on the origi
 
 The labels remain **title-derived hints**, not claims that the video stream has been independently inspected. A generic `HDR` label is emitted only when the title does not specify a more concrete HDR type; `HDR+` alone is not promoted to `HDR10+`. Details and examples: [English policy](docs/hdr-title-normalization.md) and [Russian policy](docs/hdr-title-normalization.ru.md).
 
+
+## Planned: source-only HDR metadata enrichment in the normalized title
+
+**Goal:** supplement the adapter's normalized release title with missing HDR-format labels, using only the JacRed search result already returned for that release. Do not download a torrent or video, run another `ffprobe`, or perform frame-level analysis.
+
+### Evidence and classification
+
+- Continue using the original JacRed `Title` as the existing fallback for release-label parsing.
+- Inspect structured `ffprobe` fields only when they are already present in the current JacRed result. Do not assume optional fields exist; the currently sampled API responses included generic `info.videotype=hdr/sdr` but did not expose the fields needed to distinguish HDR subtypes reliably.
+- Do not infer a specific standard from `info.videotype`, codec, resolution or bit depth alone. If relevant evidence is missing or ambiguous, retain the current title-derived behavior and do not invent a format label.
+- When structured Dolby Vision configuration is already available, use the reported profile and base-layer compatibility identifier where present; never treat every DV profile as HDR10-compatible.
+- **Profile 8.1 title rule:** when the original release title explicitly identifies Dolby Vision Profile 8.1 (for example, `DV 8.1` or `Dolby Vision 8.1`), infer HDR10 compatibility and add `HDR10` to the normalized title if it is missing. Do not apply this inference to a bare `DV`, an unspecified Profile 8, or another DV profile without sufficient evidence.
+- Detect `HDR10+` from explicit title evidence or already-present, explicit HDR10+ metadata. Do not infer it from generic HDR or HDR10. Do not add a separate `HDR10` marker solely because HDR10+ is backward-compatible with HDR10.
+
+### Normalized-title output
+
+- Append missing canonical markers to the **normalized title's quality segment**, after source/quality and resolution tokens where present, using the existing canonical order: `HDR10`, `HDR10+`, `Dolby Vision`.
+- Recognize existing labels case-insensitively and account for equivalent spellings such as `DoVi`; avoid duplicate labels.
+- Do not rewrite or remove source-title text. Preserve the original JacRed `Title` after the existing `***` separator and in the Torznab description.
+- Example: source title `Example Movie 2160p DV 8.1` → normalized title includes `2160p HDR10 Dolby Vision`, while the original source title remains intact after `***`.
+- These labels describe evidence available in the source metadata or release name; they must not be presented as proof that the file was independently inspected or will play correctly on every device.
+
+### Acceptance tests
+
+- [ ] Explicit `DV 8.1` / `Dolby Vision 8.1` without `HDR10` adds the missing `HDR10` marker to the normalized title.
+- [ ] Already-present HDR labels are not duplicated, and the original JacRed title remains unchanged after `***`.
+- [ ] Explicit HDR10+ is normalized as `HDR10+` without adding a redundant `HDR10` marker solely from compatibility.
+- [ ] A bare or ambiguous `DV`, an unspecified Profile 8, and Profile 5 do not trigger the Profile 8.1 HDR10 inference.
+- [ ] Missing or insufficient structured metadata does not trigger additional video/file analysis and does not create unsupported labels.
+- [ ] Existing movie and TV title-formatting paths, all resolutions, and the current title-only HDR behavior remain covered by tests.
+
 ## v2.3.0: local source and persistent upstream protection
 
 **v2.3.0 baseline validation as of 2026-10-13:** GitHub Actions run #12 passed Python compilation and all 17 mock-upstream tests on commit `025a0a57911cb5bd06d8c1c85a7c3425be8e5b79`. This validation applies to the 2.3.0 baseline; the 2.3.1 interval change requires its own CI run.
@@ -152,7 +183,7 @@ Adjust the service account and interpreter path to match the actual unit. Resett
 - TV parent category `5000` and Anime subcategory `5070`; movie parent `2000` and supported movie source categories `2010, 2020, 2030, 2040, 2045, 2050, 2060, 2070, 2080, 2090`.
 - Movie and TV records use separate title-formatting branches.
 - Movie subcategory filtering does not discard a release merely because JacRed only supplied its parent category; unsupported source details are not invented.
-- Quality detection priority: ffprobe dimensions → JacRed `info.quality` → release title. Video resolution/codec metadata may be exposed when available. HDR handling is currently rudimentary: several HDR-like markers can collapse to the generic `HDR` label; specific HDR10 / HDR10+ / Dolby Vision classification is not yet implemented and is tracked under Remaining end-to-end validation.
+- Quality detection priority: ffprobe dimensions → JacRed `info.quality` → release title. Video resolution/codec metadata may be exposed when available. v2.4.0 normalizes title-derived `HDR10`, `HDR10+`, `Dolby Vision` / `DoVi`, generic `HDR` and `SDR` markers into the normalized title. A further planned improvement to infer HDR10 compatibility from an explicitly named Dolby Vision Profile 8.1 is tracked below; these remain title-derived or source-metadata-derived hints, not independent verification of video playback.
 - Voice metadata is taken in priority order from Russian audio-stream tags in ffprobe, JacRed `info.voices`, or supported MVO patterns in the source title. Available language information is also exposed in Torznab metadata.
 - Formatted title retains the original source title after `***` when it differs from the normalized title, and the original title is also the Torznab description.
 - Standard torrent enclosure MIME type, magnet URL, infohash and source date parsing.
