@@ -55,6 +55,41 @@ The v2.4.0 release and its HDR-specific acceptance checks are complete. The item
 3. **Combined automatic selection.** HDR title normalization and the relevant Sonarr/Radarr behavior have been checked. The broader combined ranking path still needs an explicitly recorded end-to-end case covering preferred voice/dubbing scores together with resolution, source format and HDR. Scoring policy belongs to Sonarr/Radarr.
 4. **Remaining mock-upstream failure cases.** The automated suite already covers HTTP 429 and both `Retry-After` formats, HTTP 403/401, persisted protection state, single HALF_OPEN probing, cache behavior while OPEN, serialized requests and a combined-search abort on 403. Add explicit local-mock cases for queue-wait expiration/HTTP 503, upstream timeouts, and partial movie/TV branch failures. Do not use public JacRed to generate failure cases. Any real-source recovery check must be a single controlled attempt after the protection period.
 
+
+## Planned: RuTracker release-title normalization gap
+
+**Observed example:** `Lexx (1997) 480p | ТВ6 *** Лексс / Lexx / Сезон: 1 / Серии: 1-4 из 4 ... [1997, ... DVD5] MVO (ТВ6)`.
+
+The currently documented parser covers formats such as `6 сезон (1-22 из 22)` and `S11E01-10`, but does not yet cover the labelled RuTracker notation `Сезон: 1 / Серии: 1-4 из 4`. The source-format parser also needs to recognize the explicit `DVD5` marker so it can be placed in the normalized title.
+
+- [ ] Parse the labelled Russian season/episode notation, including whitespace and punctuation variants, into `S01E01-04`.
+- [ ] Recognize `DVD5` as a release/source-format marker. Consider `DVD9`, `DVDRip` and `DVD` explicitly and test that each remains distinguishable.
+- [ ] Add fixture-based regression tests for the full release title, including year `1997`, quality `480p`, the `ТВ6` voice marker from `MVO (ТВ6)`, and the normalized episode range.
+- [ ] Preserve the complete original JacRed title after `***` and in the Torznab description; normalization must not discard the source details.
+- [ ] Validate the normalized result through the local Torznab endpoint and confirm how Sonarr maps the resulting series/episode range.
+
+Expected normalized prefix for this example:
+
+```text
+Lexx S01E01-04 (1997) DVD5 480p | ТВ6
+```
+
+The title supplied in chat may contain Markdown/link/table wrappers. Tests must use the raw JacRed `Title` field, not those presentation wrappers; add HTML-entity/tag cleanup only if the raw API fixture demonstrates that such markup is actually present in the field.
+
+## Planned: Telegram error and warning notifications through the shared gateway
+
+Use the approved shared notification-gateway contract rather than adding direct Telegram bot credentials or per-adapter chat configuration.
+
+- [ ] Send terminal/fatal errors using the shared `critical` tag; send recoverable warnings using `warnings`.
+- [ ] Route notifications through the shared Apprise API using configurable `apprise_url` and the agreed `arr-stack` configuration key. The gateway, not this adapter, owns Telegram bot credentials and the mapping to the approved Telegram forum topics (including `Предупреждения` and `Информация о выполнении`).
+- [ ] Emit actionable events for adapter startup/configuration failures and persistent upstream-protection/manual-review states; use warnings for recoverable upstream failures, rate limits/backoff, queue timeouts and transient availability issues.
+- [ ] Aggregate or deduplicate repeated unchanged conditions so repeated *Arr searches do not flood Telegram. A change of state or a new terminal incident should still be visible.
+- [ ] Sanitize notifications: never include API keys, authorization data, full credential-bearing URLs, magnets or torrent hashes. Include a concise failure reason and relevant adapter state instead.
+- [ ] Keep notification delivery best-effort: an Apprise/Telegram outage must not break Torznab responses or upstream-protection logic. Record delivery failures safely and avoid infinite notification retries.
+- [ ] Add unit tests with a mocked Apprise endpoint for route tags, payload shape, redaction, deduplication/aggregation, gateway failure and disabled notifications; verify routing against the agreed Telegram topics before deployment.
+
+Acceptance criteria: a recoverable upstream warning reaches the `warnings` route; a terminal error reaches the `critical` route; repeated identical events are suppressed; no Telegram secrets or release identifiers leak into messages; and the adapter continues to serve its normal error response if notification delivery fails.
+
 ## v2.4.0: title-only HDR label normalization
 
 The local JacRed sample query for `Lanterns` (2026) returned 106 unique releases. `info.videotype` was present for all 106 items, but only as a generic `hdr`/`sdr` value; `info.video_type` was absent. The 76 releases with ffprobe stream metadata did not expose the fields needed here to distinguish HDR subtypes (such as `color_primaries`, `color_transfer`, `pix_fmt`, or `side_data_list`). We therefore do not treat the current API fields as evidence for HDR10, HDR10+ or Dolby Vision.
