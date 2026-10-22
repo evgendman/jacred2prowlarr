@@ -56,6 +56,22 @@ The v2.4.0 release and its HDR-specific acceptance checks are complete. The item
 4. **Remaining mock-upstream failure cases.** The automated suite already covers HTTP 429 and both `Retry-After` formats, HTTP 403/401, persisted protection state, single HALF_OPEN probing, cache behavior while OPEN, serialized requests and a combined-search abort on 403. Add explicit local-mock cases for queue-wait expiration/HTTP 503, upstream timeouts, and partial movie/TV branch failures. Do not use public JacRed to generate failure cases. Any real-source recovery check must be a single controlled attempt after the protection period.
 
 
+## Planned: exclude attached images from ffprobe quality detection
+
+**Observed and diagnosed on 2026-10-22.** The JacRed search results for the RuTracker release [Бременские музыканты / 2023 / РУ / WEB-DL (1080p)](https://rutracker.org/forum/viewtopic.php?t=6505081) and its Kinozal counterpart both reported `info.quality=1080` and the same ffprobe stream dimensions:
+
+- H.264: `1920x804` — the actual video stream, consistent with 1080p.
+- PNG: `5184x7776` — a still image exposed by ffprobe as a stream with `codec_type=video`.
+
+The current `first_video_stream()` filters on `codec_type == "video"` and excludes `mjpeg`, but does not exclude PNG still-image streams or check `disposition.attached_pic`. It then chooses the remaining candidate with the largest pixel area. The PNG therefore wins over H.264; `resolution_class()` maps its width (5184) to `2160p`. Because `extract_actual_quality()` trusts the selected ffprobe stream first, the correct `info.quality=1080` and source-title marker `(1080p)` are never consulted. This is a confirmed adapter-side stream-selection bug, not evidence that JacRed's quality metadata is wrong.
+
+- [ ] Update video-stream selection to ignore streams explicitly marked `disposition.attached_pic` and known still-image codecs such as `png`, without incorrectly rejecting legitimate moving-video streams.
+- [ ] Keep the existing quality fallback order: valid moving-video dimensions → JacRed `info.quality` → release title. A rejected cover/image stream must not count as successful ffprobe quality evidence.
+- [ ] Add regression fixtures for both observed tracker records or an equivalent shared fixture: H.264 `1920x804` plus PNG `5184x7776`, with `info.quality=1080`, must produce `1080p`, never `2160p`.
+- [ ] Test attached images marked through `disposition.attached_pic`, including cases where the image codec is not PNG; ensure a high-resolution still image never outranks the actual video.
+- [ ] Test fallback behavior when no valid moving-video stream remains: use a valid JacRed `info.quality`, and only then parse resolution from the release title.
+- [ ] Run the unit suite and verify the normalized title and Torznab quality/resolution attributes agree for the regression fixture before deploying a new adapter version.
+
 ## Planned: RuTracker release-title normalization gap
 
 **Observed example:** `Lexx (1997) 480p | ТВ6 *** Лексс / Lexx / Сезон: 1 / Серии: 1-4 из 4 ... [1997, ... DVD5] MVO (ТВ6)`.
@@ -218,7 +234,7 @@ Adjust the service account and interpreter path to match the actual unit. Resett
 - TV parent category `5000` and Anime subcategory `5070`; movie parent `2000` and supported movie source categories `2010, 2020, 2030, 2040, 2045, 2050, 2060, 2070, 2080, 2090`.
 - Movie and TV records use separate title-formatting branches.
 - Movie subcategory filtering does not discard a release merely because JacRed only supplied its parent category; unsupported source details are not invented.
-- Quality detection priority: ffprobe dimensions → JacRed `info.quality` → release title. Video resolution/codec metadata may be exposed when available. v2.4.0 normalizes title-derived `HDR10`, `HDR10+`, `Dolby Vision` / `DoVi`, generic `HDR` and `SDR` markers into the normalized title. A further planned improvement to infer HDR10 compatibility from an explicitly named Dolby Vision Profile 8.1 is tracked below; these remain title-derived or source-metadata-derived hints, not independent verification of video playback.
+- Quality detection priority remains ffprobe dimensions → JacRed `info.quality` → release title. An issue was identified on 2026-10-22: `first_video_stream()` can select a very large PNG cover/image exposed as a `video` stream instead of the actual H.264 video, causing a false `2160p` result even when JacRed's `info.quality` and the source title both indicate `1080p`. Track the fix and regression criteria in [attached-image quality detection](#planned-exclude-attached-images-from-ffprobe-quality-detection). Video resolution/codec metadata may be exposed when available. v2.4.0 normalizes title-derived `HDR10`, `HDR10+`, `Dolby Vision` / `DoVi`, generic `HDR` and `SDR` markers into the normalized title. A further planned improvement to infer HDR10 compatibility from an explicitly named Dolby Vision Profile 8.1 is tracked below; these remain title-derived or source-metadata-derived hints, not independent verification of video playback.
 - Voice metadata is taken in priority order from Russian audio-stream tags in ffprobe, JacRed `info.voices`, or supported MVO patterns in the source title. Available language information is also exposed in Torznab metadata.
 - Formatted title retains the original source title after `***` when it differs from the normalized title, and the original title is also the Torznab description.
 - Standard torrent enclosure MIME type, magnet URL, infohash and source date parsing.
