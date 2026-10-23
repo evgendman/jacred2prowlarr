@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.4.1"
+VERSION = "2.4.2"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -972,6 +972,19 @@ def actual_resolution(item):
 
 def normalize_season_episode(title):
     title = clean(title)
+
+    # RuTracker often labels the season and episode range rather than using
+    # the usual "6 сезон (1-22 из 22)" form. Parse this explicit notation
+    # first so the season's number is not confused with the episode range.
+    labelled_range = re.search(
+        r"(?i)\bсезон\s*[:=]\s*(\d{1,3})\s*(?:[/|,;]\s*)?"
+        r"серии\s*[:=]\s*(\d{1,4})\s*[-–—]\s*(\d{1,4})",
+        title,
+    )
+    if labelled_range:
+        season, first_ep, last_ep = (int(labelled_range.group(i)) for i in (1, 2, 3))
+        return f"S{season:02d}E{first_ep:02d}-{last_ep:02d}"
+
     patterns = (
         r"\bS(\d{1,3})E(\d{1,4})(?:-E?(\d{1,4}))?\b",
         r"\b(\d{1,3})\s*[xх×]\s*(\d{1,4})\s*[-–—]\s*(\d{1,4})\b",
@@ -1052,11 +1065,23 @@ def extract_format(title):
         r"\b(WEB-DLRip)\b",
         r"\b(WEB-DL)(?:-(?:480p|576p|720p|1080p|2160p))?\b",
         r"\b(WEBRip|BDRip|BRRip|BluRay|HDRip|HDTV)\b",
+        r"\bDVDRip\b|\bDVD[\s-]+Rip\b",
+        r"\bDVD[59]\b",
+        r"\bDVD\b",
     )
     for index, pattern in enumerate(patterns):
         match = re.search(pattern, title, re.IGNORECASE)
         if match:
-            return f"{match.group(1)}-{clean(match.group(2))}" if index == 0 else match.group(1)
+            if index == 0:
+                return f"{match.group(1)}-{clean(match.group(2))}"
+            if index == 4:
+                # Normalize spelling variants such as "DVD-Rip" to one token.
+                return "DVDRip"
+            if index == 5:
+                return match.group(0).upper()
+            if index == 6:
+                return "DVD"
+            return match.group(1)
     return ""
 
 
