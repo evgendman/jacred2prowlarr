@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.4.3"
+VERSION = "2.4.4"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -984,6 +984,33 @@ def normalize_season_episode(title):
         first, last = (int(prefixed_season_range.group(i)) for i in (1, 2))
         if last > first:
             return f"S{first:02d}-S{last:02d}"
+
+    # Some release titles put the season number before the word "season":
+    # "1 сезон 12 серия" or "1 сезон: 1-13 серии из 13". Parse these
+    # single-season episode notations before the generic season-range matcher.
+    single_season_episode_range = re.search(
+        r"(?i)\b(\d{1,3})\s*(?:-?(?:й|ой|ый|ого|го|ему|ому|му|м|ом|ым))?"
+        r"\s+сез\w*\s*[:=]?\s*\(?\s*(\d{1,4})\s*[-–—]\s*(\d{1,4})"
+        r"(?:\s*сер\w*)?(?:\s+из\s+\d{1,4})?",
+        title,
+    )
+    if single_season_episode_range:
+        season, first_ep, last_ep = (
+            int(single_season_episode_range.group(i)) for i in (1, 2, 3)
+        )
+        return f"S{season:02d}E{first_ep:02d}-{last_ep:02d}"
+
+    single_season_episode = re.search(
+        r"(?i)\b(\d{1,3})\s*(?:-?(?:й|ой|ый|ого|го|ему|ому|му|м|ом|ым))?"
+        r"\s+сез\w*\s*[,;:/|—-]?\s*"
+        r"(\d{1,4})\s*(?:-?(?:я|ая|й|ой|ый|юю|ую))?\s+сер\w*\b",
+        title,
+    )
+    if single_season_episode:
+        season, episode = (
+            int(single_season_episode.group(i)) for i in (1, 2)
+        )
+        return f"S{season:02d}E{episode:02d}"
 
     # Explicitly labelled multi-season ranges take priority over episode ranges.
     # For packs spanning multiple seasons, the "1-61 episodes" notation may be

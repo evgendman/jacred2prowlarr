@@ -58,6 +58,45 @@ class RuTrackerTitleNormalizationTests(unittest.TestCase):
         # Non-contiguous season lists must not be misrepresented as a range.
         self.assertEqual(adapter.normalize_season_episode("Lexx [s1,s3]"), "")
 
+    def test_season_before_episode_notation(self):
+        cases = (
+            ("Debris / 1 сезон 12 серия [2021, 1080p]", "S01E12"),
+            ("Debris / 1 сезон 1 серия", "S01E01"),
+            ("Debris / 1-й сезон, 12-я серия", "S01E12"),
+            ("Debris / Обломки (1 сезон: 1-13 серии из 13)", "S01E01-13"),
+            ("Debris / Обломки (1 сезон: 1-2 серии из 8)", "S01E01-02"),
+            ("Debris / 1 сезон (1-13 из 13)", "S01E01-13"),
+        )
+        for title, expected in cases:
+            with self.subTest(title=title):
+                self.assertEqual(adapter.normalize_season_episode(title), expected)
+
+    def test_debris_episode_title_and_feed_keep_source_title(self):
+        source_title = "Обломки / Debris / 1 сезон 12 серия [2021, 1080p]"
+        item = lexx_item(source_title)
+        item["info"].update({
+            "name": "Debris",
+            "originalname": "Debris",
+            "relased": 2021,
+            "quality": 1080,
+        })
+
+        normalized_title = adapter.make_tv_title(item)
+        self.assertTrue(
+            normalized_title.startswith("Debris S01E12 (2021) 1080p"),
+            normalized_title,
+        )
+        self.assertIn("*** " + source_title, normalized_title)
+
+        feed = ET.fromstring(adapter.make_feed([(item, "tv")]))
+        feed_item = feed.find("./channel/item")
+        self.assertIsNotNone(feed_item)
+        self.assertTrue(
+            feed_item.findtext("title").startswith("Debris S01E12 (2021) 1080p"),
+            feed_item.findtext("title"),
+        )
+        self.assertEqual(feed_item.findtext("description"), source_title)
+
     def test_multi_season_labels_are_ranges_not_episode_ranges(self):
         cases = (
             ("Lexx / Сезон: 1-4 из 4 / Серии: 1-61 из 61", "S01-S04"),
