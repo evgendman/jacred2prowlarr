@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.4.0"
+VERSION = "2.4.1"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -837,14 +837,31 @@ def title_voice_fallback(title):
 # ----------------------------------------------------------------
 
 def first_video_stream(ffprobe):
+    """Choose a moving-video stream, never an attached cover or still image."""
     if not isinstance(ffprobe, list):
         return None
+
+    # ffprobe can expose attached artwork as codec_type=video. Some APIs also
+    # expose standalone still-image streams without setting attached_pic, so
+    # reject those known image codecs as a second line of defence. Do not use a
+    # broad codec blacklist: ordinary H.264/HEVC/AV1 video streams remain valid.
+    still_image_codecs = {"bmp", "gif", "png", "tiff", "webp"}
+    attached_pic_values = {"1", "true", "yes", "on"}
     candidates = []
     for stream in ffprobe:
         if not isinstance(stream, dict) or stream.get("codec_type") != "video":
             continue
-        if clean(stream.get("codec_name")).lower() == "mjpeg":
+
+        disposition = stream.get("disposition")
+        if isinstance(disposition, dict):
+            attached_pic = clean(disposition.get("attached_pic")).lower()
+            if attached_pic in attached_pic_values:
+                continue
+
+        codec_name = clean(stream.get("codec_name")).lower()
+        if codec_name == "mjpeg" or codec_name in still_image_codecs:
             continue
+
         width, height = as_int(stream.get("width")), as_int(stream.get("height"))
         if width < 640 and height < 640:
             continue

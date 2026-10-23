@@ -4,7 +4,7 @@
 
 **JacRed v2 JSON → Torznab adapter for Prowlarr, Sonarr and Radarr.**
 
-Current version: **2.4.0**
+Current version: **2.4.1**
 
 The adapter turns JacRed's Russian-tracker release data into consistent Torznab results that the *Arr applications can parse and rank more reliably. It is intended to bridge two gaps: Russian release titles do not always follow the naming patterns expected by Sonarr/Radarr, and a direct indexer connectivity test may fail when the upstream returns no real result for an empty search.
 
@@ -98,11 +98,11 @@ Where detected, voice labels are appended to the normalized title (for example, 
 
 Quality detection uses this priority:
 
-1. video dimensions from `ffprobe`, when available;
+1. dimensions from a valid moving-video stream in `ffprobe`;
 2. JacRed `info.quality`;
 3. an explicit resolution marker in the release title.
 
-This retains useful quality information even when a Russian release title omits an explicit resolution token. HDR/SDR labels are extracted from the original release title only and normalized as `HDR10`, `HDR10+`, `Dolby Vision`, generic `HDR`, or explicit `SDR`. The labels are emitted at any resolution, and combined markers are retained when explicitly named (for example, `2160p HDR10+ Dolby Vision`). The adapter does not infer an HDR subtype from `info.videotype`, codec, bit depth or resolution; the markers are title-derived hints, not verification of the encoded stream. See [HDR title normalization](docs/hdr-title-normalization.md). The adapter also emits resolution/video-codec attributes where ffprobe provides them.
+Streams explicitly marked as attached pictures and known still-image codecs (including PNG) are excluded from video-quality selection. This avoids mistaking a high-resolution poster or cover for the actual video. If no valid moving-video stream remains, the adapter falls back to JacRed metadata and then the release title. This retains useful quality information even when a Russian release title omits an explicit resolution token. HDR/SDR labels are extracted from the original release title only and normalized as `HDR10`, `HDR10+`, `Dolby Vision`, generic `HDR`, or explicit `SDR`. The labels are emitted at any resolution, and combined markers are retained when explicitly named (for example, `2160p HDR10+ Dolby Vision`). The adapter does not infer an HDR subtype from `info.videotype`, codec, bit depth or resolution; the markers are title-derived hints, not verification of the encoded stream. See [HDR title normalization](docs/hdr-title-normalization.md). The adapter also emits resolution/video-codec attributes where ffprobe provides them.
 
 Other protocol details include the standard `application/x-bittorrent` enclosure MIME type, magnet URL and infohash attributes, and date handling for JacRed RFC3339/RFC3339Nano timestamps. Malformed or absent source dates are not replaced with the current time. Duplicate merged results are removed by infohash where possible.
 
