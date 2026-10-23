@@ -4,6 +4,8 @@
 
 Current release on MINI-Ubuntu: **2.4.0** (installed and validated 2026-10-14); source commit: [`bcaf416d83b86041cd0049da90dddb33c53e1bb4`](https://github.com/evgendman/jacred2prowlarr/commit/bcaf416d83b86041cd0049da90dddb33c53e1bb4); [CI run #30 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/38595960157) (Python compilation and all 32 tests).
 
+Candidate **v2.4.1** fixes ffprobe stream selection when JacRed exposes a large attached cover/image as `codec_type=video`. The fix, regression tests and bilingual documentation are being validated on branch [`fix/attached-image-quality-2.4.1`](https://github.com/evgendman/jacred2prowlarr/tree/fix/attached-image-quality-2.4.1); it is not installed on MINI-Ubuntu yet.
+
 ## Project goal
 
 Provide one local Torznab endpoint for Prowlarr that converts JacRed v2 JSON results into predictable movie and TV release records for Sonarr and Radarr. The adapter addresses Russian-tracker naming, dubbing/voice metadata, category reporting, empty-query connectivity tests, duplicate upstream traffic and request pacing.
@@ -56,7 +58,7 @@ The v2.4.0 release and its HDR-specific acceptance checks are complete. The item
 4. **Remaining mock-upstream failure cases.** The automated suite already covers HTTP 429 and both `Retry-After` formats, HTTP 403/401, persisted protection state, single HALF_OPEN probing, cache behavior while OPEN, serialized requests and a combined-search abort on 403. Add explicit local-mock cases for queue-wait expiration/HTTP 503, upstream timeouts, and partial movie/TV branch failures. Do not use public JacRed to generate failure cases. Any real-source recovery check must be a single controlled attempt after the protection period.
 
 
-## Planned: exclude attached images from ffprobe quality detection
+## v2.4.1 candidate: exclude attached images from ffprobe quality detection
 
 **Observed and diagnosed on 2026-10-22.** The JacRed search results for the RuTracker release [Бременские музыканты / 2023 / РУ / WEB-DL (1080p)](https://rutracker.org/forum/viewtopic.php?t=6505081) and its Kinozal counterpart both reported `info.quality=1080` and the same ffprobe stream dimensions:
 
@@ -65,12 +67,12 @@ The v2.4.0 release and its HDR-specific acceptance checks are complete. The item
 
 The current `first_video_stream()` filters on `codec_type == "video"` and excludes `mjpeg`, but does not exclude PNG still-image streams or check `disposition.attached_pic`. It then chooses the remaining candidate with the largest pixel area. The PNG therefore wins over H.264; `resolution_class()` maps its width (5184) to `2160p`. Because `extract_actual_quality()` trusts the selected ffprobe stream first, the correct `info.quality=1080` and source-title marker `(1080p)` are never consulted. This is a confirmed adapter-side stream-selection bug, not evidence that JacRed's quality metadata is wrong.
 
-- [ ] Update video-stream selection to ignore streams explicitly marked `disposition.attached_pic` and known still-image codecs such as `png`, without incorrectly rejecting legitimate moving-video streams.
-- [ ] Keep the existing quality fallback order: valid moving-video dimensions → JacRed `info.quality` → release title. A rejected cover/image stream must not count as successful ffprobe quality evidence.
-- [ ] Add regression fixtures for both observed tracker records or an equivalent shared fixture: H.264 `1920x804` plus PNG `5184x7776`, with `info.quality=1080`, must produce `1080p`, never `2160p`.
-- [ ] Test attached images marked through `disposition.attached_pic`, including cases where the image codec is not PNG; ensure a high-resolution still image never outranks the actual video.
-- [ ] Test fallback behavior when no valid moving-video stream remains: use a valid JacRed `info.quality`, and only then parse resolution from the release title.
-- [ ] Run the unit suite and verify the normalized title and Torznab quality/resolution attributes agree for the regression fixture before deploying a new adapter version.
+- [x] Update video-stream selection to ignore streams explicitly marked `disposition.attached_pic` and known still-image codecs such as `png`, without incorrectly rejecting legitimate moving-video streams.
+- [x] Keep the existing quality fallback order: valid moving-video dimensions → JacRed `info.quality` → release title. A rejected cover/image stream does not count as successful ffprobe quality evidence.
+- [x] Add regression fixtures for H.264 `1920x804` plus PNG `5184x7776`, with `info.quality=1080`; the result must be `1080p`, never `2160p`.
+- [x] Test attached images marked through `disposition.attached_pic` even when the codec is not PNG; a high-resolution still image must not outrank actual video.
+- [x] Test fallback behavior when no valid moving-video stream remains: use a valid JacRed `info.quality`, and only then parse resolution from the release title.
+- [ ] Run the complete unit suite and verify the normalized title and Torznab quality/resolution attributes in CI and on the deployment fixture before installing v2.4.1 on MINI-Ubuntu.
 
 ## Planned: RuTracker release-title normalization gap
 
