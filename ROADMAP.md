@@ -2,9 +2,9 @@
 
 [English documentation](README.md) | [Документация на русском](README.ru.md)
 
-Current release on MINI-Ubuntu: **2.4.0** (installed and validated 2026-10-14); source commit: [`bcaf416d83b86041cd0049da90dddb33c53e1bb4`](https://github.com/evgendman/jacred2prowlarr/commit/bcaf416d83b86041cd0049da90dddb33c53e1bb4); [CI run #30 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/38595960157) (Python compilation and all 32 tests).
+Current release on MINI-Ubuntu: **2.4.1** (installed and validated 2026-10-23); candidate source commit: [`866cfa086a64aa15b1a95aee3bc1c6e2041fc740`](https://github.com/evgendman/jacred2prowlarr/commit/866cfa086a64aa15b1a95aee3bc1c6e2041fc740); [CI run #36 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39944532848) (Python compilation and all 37 tests).
 
-Candidate **v2.4.1** fixes ffprobe stream selection when JacRed exposes a large attached cover/image as `codec_type=video`. The fix, regression tests and bilingual documentation are being validated on branch [`fix/attached-image-quality-2.4.1`](https://github.com/evgendman/jacred2prowlarr/tree/fix/attached-image-quality-2.4.1); it is not installed on MINI-Ubuntu yet.
+Version **2.4.1** fixes ffprobe stream selection when JacRed exposes a large attached cover/image as `codec_type=video`. The fix has passed CI and was installed on MINI-Ubuntu on 2026-10-23. Deployment log: `jacred2prowlarr-2.4.1-deploy.log` (37 tests passed; service active; Torznab caps and synthetic movie checks returned HTTP 200). The v2.4.1 change set is tracked in [PR #5](https://github.com/evgendman/jacred2prowlarr/pull/5).
 
 ## Project goal
 
@@ -72,7 +72,8 @@ The current `first_video_stream()` filters on `codec_type == "video"` and exclud
 - [x] Add regression fixtures for H.264 `1920x804` plus PNG `5184x7776`, with `info.quality=1080`; the result must be `1080p`, never `2160p`.
 - [x] Test attached images marked through `disposition.attached_pic` even when the codec is not PNG; a high-resolution still image must not outrank actual video.
 - [x] Test fallback behavior when no valid moving-video stream remains: use a valid JacRed `info.quality`, and only then parse resolution from the release title.
-- [ ] Run the complete unit suite and verify the normalized title and Torznab quality/resolution attributes in CI and on the deployment fixture before installing v2.4.1 on MINI-Ubuntu.
+- [x] Run the complete unit suite and verify normalized title and Torznab quality/resolution attributes in the regression fixture. CI run #36 passed compilation and all 37 tests.
+- [x] Deploy v2.4.1 on MINI-Ubuntu on 2026-10-23. Captured terminal output confirms version 2.4.1 is running, systemd reports `active/running` with `Result=success`, and local Torznab `caps` plus synthetic movie connectivity checks both returned HTTP 200. Detailed terminal output is saved in `jacred2prowlarr-2.4.1-deploy.log` in the user's Trace library.
 
 ## Planned: RuTracker release-title normalization gap
 
