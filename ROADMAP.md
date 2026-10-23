@@ -2,9 +2,9 @@
 
 [English documentation](README.md) | [Документация на русском](README.ru.md)
 
-Current release on MINI-Ubuntu: **2.4.1** (installed and validated 2026-10-23); merged source commit: [`5ab51cf0eb1f905df2cd0bdf184ea549bf1ac025`](https://github.com/evgendman/jacred2prowlarr/commit/5ab51cf0eb1f905df2cd0bdf184ea549bf1ac025); [CI run #37 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39947121004) (Python compilation and all 37 tests).
+Current release on MINI-Ubuntu: **2.4.2** (installed and validated 2026-10-23); merged source commit: [`56de4b4187f345fd3cbaf424da41e3d60d7bd634`](https://github.com/evgendman/jacred2prowlarr/commit/56de4b4187f345fd3cbaf424da41e3d60d7bd634); [CI run #43 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39948092889) (Python compilation and all 43 tests). Deployment log: `jacred2prowlarr-2.4.2-deploy.log`; service active, Lexx sample normalizes as expected, and local Torznab checks returned HTTP 200.
 
-Candidate **v2.4.2** adds labelled RuTracker season/episode parsing (`Сезон: 1 / Серии: 1-4 из 4` → `S01E01-04`) and canonical DVD source markers. Implementation and regression tests passed [CI run #41](https://github.com/evgendman/jacred2prowlarr/actions/runs/39947953925) (Python compilation and all 43 tests) on branch [`fix/rutracker-title-normalization-2.4.2`](https://github.com/evgendman/jacred2prowlarr/tree/fix/rutracker-title-normalization-2.4.2). Production remains on v2.4.1 pending deployment-side verification.
+Candidate **v2.4.3** extends title parsing for season-only markers (`[S01]`, `Сезон 1`, `Season 1`), labelled episodes without colons, and explicit multi-season ranges such as `Сезоны: 1-4`. For a multi-season release, a global episode total such as `1-61` must not be fabricated as `S01E01-61`. Regression coverage is in [PR #7](https://github.com/evgendman/jacred2prowlarr/pull/7); production remains on v2.4.2 pending candidate CI and deployment verification.
 
 Version **2.4.1** fixes ffprobe stream selection when JacRed exposes a large attached cover/image as `codec_type=video`. The fix has passed CI and was installed on MINI-Ubuntu on 2026-10-23. Deployment log: `jacred2prowlarr-2.4.1-deploy.log` (37 tests passed; service active; Torznab caps and synthetic movie checks returned HTTP 200). The v2.4.1 change set is tracked in [PR #5](https://github.com/evgendman/jacred2prowlarr/pull/5).
 
@@ -78,7 +78,7 @@ The current `first_video_stream()` filters on `codec_type == "video"` and exclud
 - [x] Deploy v2.4.1 on MINI-Ubuntu on 2026-10-23. Captured terminal output confirms version 2.4.1 is running, systemd reports `active/running` with `Result=success`, and local Torznab `caps` plus synthetic movie connectivity checks both returned HTTP 200. Detailed terminal output is saved in `jacred2prowlarr-2.4.1-deploy.log` in the user's Trace library.
 - [x] Manual real-release check confirmed by the user after deployment: the known RuTracker release `Бременские музыканты (2023) WEB-DL 1080p | Original | 5.1 E-AC3 Audio *** Бременские музыканты / 2023 / РУ / WEB-DL (1080p)` now works; the adapter no longer misclassifies the attached image as 2160p.
 
-## v2.4.2 candidate: RuTracker release-title normalization
+## v2.4.2: RuTracker release-title normalization (deployed)
 
 **Observed example:** `Lexx (1997) 480p | ТВ6 *** Лексс / Lexx / Сезон: 1 / Серии: 1-4 из 4 ... [1997, ... DVD5] MVO (ТВ6)`.
 
@@ -89,7 +89,7 @@ The currently documented parser covers formats such as `6 сезон (1-22 из 
 - [x] Add fixture-based regression tests for the full release title, including year `1997`, quality `480p`, the `ТВ6` voice marker from `MVO (ТВ6)`, and the normalized episode range.
 - [x] Preserve the complete original JacRed title after `***` and in the Torznab description; normalization must not discard the source details.
 - [x] CI run #41 passed Python compilation and all 43 unit tests, including six new RuTracker regression tests.
-- [ ] Deploy the candidate and validate the normalized result through the local Torznab endpoint; confirm how Sonarr maps the resulting series/episode range.
+- [x] Deployed and validated on MINI-Ubuntu on 2026-10-23: all 43 tests passed; normalized Lexx output matched the expected prefix; Torznab caps and movie checks returned HTTP 200; service remained active.
 
 Expected normalized prefix for this example:
 
@@ -98,6 +98,28 @@ Lexx S01E01-04 (1997) DVD5 480p | ТВ6
 ```
 
 The title supplied in chat may contain Markdown/link/table wrappers. Tests must use the raw JacRed `Title` field, not those presentation wrappers; add HTML-entity/tag cleanup only if the raw API fixture demonstrates that such markup is actually present in the field.
+
+## v2.4.3 candidate: additional Lexx season formats
+
+**Observed in the local Torznab diagnostic** (`jacred-lexx-output.log`, 2026-10-23): a `tvsearch` for `Lexx` returned 47 items. Equivalent season metadata appears with materially different punctuation and ordering; some multi-season results also list a global count of 61 episodes.
+
+- [ ] Recognize bracketed season markers such as `[S01]`, plain Russian `Сезон 1` and English `Season 1` as season-only releases.
+- [ ] Accept Russian season/episode labels with or without colons, e.g. `Сезон 1 / Серии 1-4`.
+- [ ] Convert explicit multi-season ranges such as `Сезон: 1-4 из 4` or `Сезоны: 1-2` to `S01-S04` / `S01-S02`; do not encode a cross-season episode total as a single-season episode range.
+- [ ] Handle contiguous explicit lists such as `[s3,s4]` as `S03-S04`, while avoiding fabricated ranges for non-contiguous lists.
+- [ ] Run Python compilation and the complete unit-test suite in CI; deploy only after CI passes and then validate representative real results through the local Torznab endpoint.
+
+Expected examples:
+
+```text
+Lexx (1997) DVD5 480p *** Лексс / Lexx [S01] (1997) DVD5 | P2
+=> Lexx S01 (1997) DVD5 480p
+
+Lexx (1997) 480p *** Лексс / Lexx / Сезоны: 1-4 / Серии: 1-61 из 61
+=> Lexx S01-S04 (1997) 480p
+```
+
+Preserve the original source title after `***` and in Torznab `description`. Episode ranges should be emitted only when the source explicitly associates them with a single season.
 
 ## Planned: Telegram error and warning notifications through the shared gateway
 
