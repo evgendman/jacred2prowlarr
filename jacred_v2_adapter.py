@@ -973,6 +973,18 @@ def actual_resolution(item):
 def normalize_season_episode(title):
     title = clean(title)
 
+    # In forms such as "1-4 сезоны: 1-61 серии", the season range comes
+    # before the word "seasons". Parse this form before looking for "Сезоны: 1-61",
+    # otherwise the episode total could be mistaken for the season range.
+    prefixed_season_range = re.search(
+        r"(?i)\b(\d{1,3})\s*[-–—]\s*(\d{1,3})\s+(?:сез\w*|seasons?)\b",
+        title,
+    )
+    if prefixed_season_range:
+        first, last = (int(prefixed_season_range.group(i)) for i in (1, 2))
+        if last > first:
+            return f"S{first:02d}-S{last:02d}"
+
     # Explicitly labelled multi-season ranges take priority over episode ranges.
     # For packs spanning multiple seasons, the "1-61 episodes" notation may be
     # global numbering and must not be represented as S01E01-61.
