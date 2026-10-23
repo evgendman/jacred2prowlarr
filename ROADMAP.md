@@ -2,7 +2,7 @@
 
 [English documentation](README.md) | [Документация на русском](README.ru.md)
 
-Current release on MINI-Ubuntu: **2.4.3**. Candidate **2.4.4** addresses Russian season-before-episode notation observed in the Debris live search; it is not yet merged or deployed. (installed and locally validated 2026-10-23); merged source commit: [`09793668be0755f513785443ccceac48e816c891`](https://github.com/evgendman/jacred2prowlarr/commit/09793668be0755f513785443ccceac48e816c891); [CI run #49 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39952523992) (Python compilation and all 47 tests). Deployment log: `jacred2prowlarr-2.4.3-deploy.log`; targeted season/episode cases passed, service is active, and local Torznab caps/movie checks returned HTTP 200. Backup: `/tmp/jacred_v2_adapter.py.v2.4.2.20261023-172542.bak`.
+Current release on MINI-Ubuntu: **2.4.3**. Candidate **2.4.4** ([PR #8](https://github.com/evgendman/jacred2prowlarr/pull/8)) addresses Russian season-before-episode notation observed in the Debris live search; it is not yet merged or deployed. (installed and locally validated 2026-10-23); merged source commit: [`09793668be0755f513785443ccceac48e816c891`](https://github.com/evgendman/jacred2prowlarr/commit/09793668be0755f513785443ccceac48e816c891); [CI run #49 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39952523992) (Python compilation and all 47 tests). Deployment log: `jacred2prowlarr-2.4.3-deploy.log`; targeted season/episode cases passed, service is active, and local Torznab caps/movie checks returned HTTP 200. Backup: `/tmp/jacred_v2_adapter.py.v2.4.2.20261023-172542.bak`.
 
 Version **2.4.3** extends title parsing for season-only markers (`[S01]`, `Сезон 1`, `Season 1`), Russian labelled episodes without colons, and explicit multi-season ranges such as `Сезоны: 1-4`. For a multi-season release, a global episode total such as `1-61` is not fabricated as `S01E01-61`. [PR #7](https://github.com/evgendman/jacred2prowlarr/pull/7) is merged and the version is installed on the production host. The remaining end-to-end check is how Sonarr maps actual season-only and multi-season results.
 
@@ -130,7 +130,7 @@ Preserve the original source title after `***` and in Torznab `description`. Epi
 - [x] Parse `1 сезон 12 серия` as `S01E12`, including ordinal punctuation variants such as `1-й сезон, 12-я серия`.
 - [x] Parse a range explicitly associated with one season, e.g. `1 сезон: 1-13 серии из 13`, as `S01E01-13`; keep the original source title unchanged after `***` and in Torznab `description`.
 - [x] Add unit and feed-level regression tests for the actual Debris formats.
-- [ ] Run CI compilation and the complete unit suite.
+- [x] CI run [#51 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39964388234): Python compilation and all 49 tests passed.
 - [ ] After merge, deploy separately and verify the real Debris result list and Sonarr mapping on MINI-Ubuntu.
 
 The parser handles season-first range and single-episode forms before the generic season-range fallback. The existing earlier check for collection titles such as `1-4 сезоны: 1-61 серии из 61` remains first so a multi-season total is not misclassified as one season's episode range.
