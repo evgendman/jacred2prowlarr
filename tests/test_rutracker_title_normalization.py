@@ -43,6 +43,56 @@ class RuTrackerTitleNormalizationTests(unittest.TestCase):
             with self.subTest(title=title):
                 self.assertEqual(adapter.normalize_season_episode(title), expected)
 
+    def test_bracketed_season_markers_and_contiguous_lists(self):
+        cases = (
+            ("Лексс / Lexx [S01] (1997) DVD5", "S01"),
+            ("Лексс / Lexx [s2] (1998)", "S02"),
+            ("Лексс (Сезон 1) / Lexx (Season 1)", "S01"),
+            ("Lexx [s3,s4] (1999-2002)", "S03-S04"),
+            ("Lexx [S01-S04]", "S01-S04"),
+        )
+        for title, expected in cases:
+            with self.subTest(title=title):
+                self.assertEqual(adapter.normalize_season_episode(title), expected)
+
+        # Non-contiguous season lists must not be misrepresented as a range.
+        self.assertEqual(adapter.normalize_season_episode("Lexx [s1,s3]"), "")
+
+    def test_multi_season_labels_are_ranges_not_episode_ranges(self):
+        cases = (
+            ("Lexx / Сезон: 1-4 из 4 / Серии: 1-61 из 61", "S01-S04"),
+            ("Lexx / Сезоны: 1-2 / Серии: 1-13 из 24", "S01-S02"),
+            ("Lexx / Сезоны: 1–4", "S01-S04"),
+            ("Lexx / 1-4 сезоны: 1-61 серии из 61", "S01-S04"),
+        )
+        for title, expected in cases:
+            with self.subTest(title=title):
+                normalized = adapter.normalize_season_episode(title)
+                self.assertEqual(normalized, expected)
+                self.assertNotIn("E", normalized)
+
+    def test_labelled_episode_ranges_allow_missing_colons(self):
+        cases = (
+            ("Lexx / Сезон 1 / Серии 1-4 из 4", "S01E01-04"),
+            ("Lexx / Сезон: 1 / Серии 1-4", "S01E01-04"),
+            ("Lexx / Сезон 1 Серии: 1–4 из 4", "S01E01-04"),
+        )
+        for title, expected in cases:
+            with self.subTest(title=title):
+                self.assertEqual(adapter.normalize_season_episode(title), expected)
+
+    def test_single_season_with_non_range_episode_list_does_not_invent_range(self):
+        cases = (
+            ("Lexx / Сезон: 1 / Серии: 1,2 (4)", "S01"),
+            ("Lexx / Сезон: 2(4) / Серии: 1,2,9,12", "S02"),
+            ("Lexx / Лексс (Сезон 1) / Lexx (Season 1)", "S01"),
+        )
+        for title, expected in cases:
+            with self.subTest(title=title):
+                normalized = adapter.normalize_season_episode(title)
+                self.assertEqual(normalized, expected)
+                self.assertNotIn("E", normalized)
+
     def test_existing_season_range_syntax_remains_supported(self):
         self.assertEqual(
             adapter.normalize_season_episode("Lexx 1 сезон (1-4 из 4)"),

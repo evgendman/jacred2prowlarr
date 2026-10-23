@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.4.2"
+VERSION = "2.4.3"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -973,12 +973,66 @@ def actual_resolution(item):
 def normalize_season_episode(title):
     title = clean(title)
 
-    # RuTracker often labels the season and episode range rather than using
-    # the usual "6 сезон (1-22 из 22)" form. Parse this explicit notation
-    # first so the season's number is not confused with the episode range.
+    # In forms such as "1-4 сезоны: 1-61 серии", the season range comes
+    # before the word "seasons". Parse this form before looking for "Сезоны: 1-61",
+    # otherwise the episode total could be mistaken for the season range.
+    prefixed_season_range = re.search(
+        r"(?i)\b(\d{1,3})\s*[-–—]\s*(\d{1,3})\s+(?:сез\w*|seasons?)\b",
+        title,
+    )
+    if prefixed_season_range:
+        first, last = (int(prefixed_season_range.group(i)) for i in (1, 2))
+        if last > first:
+            return f"S{first:02d}-S{last:02d}"
+
+    # Explicitly labelled multi-season ranges take priority over episode ranges.
+    # For packs spanning multiple seasons, the "1-61 episodes" notation may be
+    # global numbering and must not be represented as S01E01-61.
+    multi_season = re.search(
+        r"(?i)\b(?:сезон(?:ы)?|seasons?)\s*[:=]?\s*"
+        r"(\d{1,3})\s*[-–—]\s*(\d{1,3})(?:\s+из\s+\d{1,3})?\b",
+        title,
+    )
+    if multi_season:
+        first, last = (int(multi_season.group(i)) for i in (1, 2))
+        if last > first:
+            return f"S{first:02d}-S{last:02d}"
+
+    # Also accept season-pack notation written as S01-S04, with or without
+    # square brackets. This pattern cannot consume the episode form S01E01-04.
+    season_range = re.search(
+        r"(?i)(?<![A-Z0-9])S\s*(\d{1,3})\s*[-–—]\s*S?\s*(\d{1,3})\b",
+        title,
+    )
+    if season_range:
+        first, last = (int(season_range.group(i)) for i in (1, 2))
+        if last > first:
+            return f"S{first:02d}-S{last:02d}"
+
+    # Some trackers list a consecutive pack as [s3,s4]. Normalize it as a range
+    # only when the listed seasons are contiguous; never imply missing seasons.
+    bracketed_season_list = re.search(
+        r"(?i)\[\s*(s\s*\d{1,3}(?:\s*[,;/]\s*s?\s*\d{1,3})+)\s*\]",
+        title,
+    )
+    if bracketed_season_list:
+        seasons = [
+            int(value)
+            for value in re.findall(r"(?i)s?\s*(\d{1,3})", bracketed_season_list.group(1))
+        ]
+        if seasons and all(
+            current + 1 == following
+            for current, following in zip(seasons, seasons[1:])
+        ):
+            return f"S{seasons[0]:02d}-S{seasons[-1]:02d}"
+        # A non-contiguous explicit list does not safely map to one season range.
+        return ""
+
+    # RuTracker may label one season and its episodes with or without colons.
+    # Example: "Сезон 1 / Серии 1-4 из 4" -> S01E01-04.
     labelled_range = re.search(
-        r"(?i)\bсезон\s*[:=]\s*(\d{1,3})\s*(?:[/|,;]\s*)?"
-        r"серии\s*[:=]\s*(\d{1,4})\s*[-–—]\s*(\d{1,4})",
+        r"(?i)\bсезон\s*[:=]?\s*(\d{1,3})\s*(?:[/|,;]\s*)?"
+        r"серии\s*[:=]?\s*(\d{1,4})\s*[-–—]\s*(\d{1,4})",
         title,
     )
     if labelled_range:
@@ -1002,6 +1056,7 @@ def normalize_season_episode(title):
         if match.lastindex and match.lastindex >= 3 and match.group(3):
             result += f"-{int(match.group(3)):02d}"
         return result
+
     # Detect a collection covering multiple seasons before the generic
     # "N seasons" fallback, otherwise "1-11 сезоны" incorrectly becomes S11.
     collection_patterns = (
@@ -1016,8 +1071,18 @@ def normalize_season_episode(title):
             if last > first:
                 return f"S{first:02d}-S{last:02d}"
 
-    match = re.search(r"\b(\d{1,3})\s*(?:-?(?:й|ой|ый|ого|го|ему|ому|му|м|ом|ым))?\s+сез\w*", title, re.IGNORECASE)
-    return f"S{int(match.group(1)):02d}" if match else ""
+    # Season-only notations: [S01], "Сезон 1", "Season 1", or "S01".
+    season_only_patterns = (
+        r"(?i)\[\s*S\s*(\d{1,3})\s*\]",
+        r"(?i)\b(?:сезон\w*|season)\s*[:=]?\s*(\d{1,3})\b",
+        r"(?i)(?<![A-Z0-9])S(\d{1,3})\b(?!\s*[-,;/]\s*S?\d)",
+        r"\b(\d{1,3})\s*(?:-?(?:й|ой|ый|ого|го|ему|ому|му|м|ом|ым))?\s+сез\w*",
+    )
+    for pattern in season_only_patterns:
+        match = re.search(pattern, title, re.IGNORECASE)
+        if match:
+            return f"S{int(match.group(1)):02d}"
+    return ""
 
 
 def result_matches_season_episode(item, season, episode):

@@ -4,7 +4,7 @@
 
 **JacRed v2 JSON → Torznab adapter for Prowlarr, Sonarr and Radarr.**
 
-Current version: **2.4.2**
+Current version: **2.4.3**
 
 The adapter turns JacRed's Russian-tracker release data into consistent Torznab results that the *Arr applications can parse and rank more reliably. It is intended to bridge two gaps: Russian release titles do not always follow the naming patterns expected by Sonarr/Radarr, and a direct indexer connectivity test may fail when the upstream returns no real result for an empty search.
 
@@ -61,11 +61,12 @@ The adapter has two formatting branches:
 Examples of TV notation normalization include:
 
 - a season-and-episode release such as `6 сезон (1-22 из 22)` → `S06E01-22`;
-- labelled RuTracker notation `Сезон: 1 / Серии: 1-4 из 4` → `S01E01-04`;
+- labelled RuTracker notation, with or without colons, such as `Сезон: 1 / Серии: 1-4 из 4` or `Сезон 1 / Серии 1-4` → `S01E01-04`;
+- season-only markers such as `[S01]`, `Сезон 1` or `Season 1` → `S01`, without inventing episode numbers;
 - an explicit episode range such as `S11E01-10` → `S11E01-10`;
-- a multi-season collection such as `1-11 сезоны` or `Seasons 1-11` → `S01-S11`.
+- a multi-season collection such as `1-11 сезоны`, `Сезоны: 1-4`, `S01-S04` or `Seasons 1-11` → `S01-S11` / `S01-S04`.
 
-The parser gives explicit episode/range notation priority over a generic season marker. That prevents a multi-season pack for seasons 1–11 from being mislabeled as season 11 only.
+Explicit multi-season ranges take priority over episode totals: `Сезоны: 1-4 / Серии: 1-61 из 61` becomes `S01-S04`, not `S01E01-61`. Episode ranges are emitted only when the source explicitly identifies a single season and its episode range.
 
 ### Example: a real X-Files multi-season release
 
