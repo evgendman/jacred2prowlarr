@@ -4,7 +4,7 @@
 
 **JacRed v2 JSON → Torznab adapter for Prowlarr, Sonarr and Radarr.**
 
-Current version: **2.4.1**
+Current version: **2.4.2**
 
 The adapter turns JacRed's Russian-tracker release data into consistent Torznab results that the *Arr applications can parse and rank more reliably. It is intended to bridge two gaps: Russian release titles do not always follow the naming patterns expected by Sonarr/Radarr, and a direct indexer connectivity test may fail when the upstream returns no real result for an empty search.
 
@@ -61,6 +61,7 @@ The adapter has two formatting branches:
 Examples of TV notation normalization include:
 
 - a season-and-episode release such as `6 сезон (1-22 из 22)` → `S06E01-22`;
+- labelled RuTracker notation `Сезон: 1 / Серии: 1-4 из 4` → `S01E01-04`;
 - an explicit episode range such as `S11E01-10` → `S11E01-10`;
 - a multi-season collection such as `1-11 сезоны` or `Seasons 1-11` → `S01-S11`.
 

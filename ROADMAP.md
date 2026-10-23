@@ -4,6 +4,8 @@
 
 Current release on MINI-Ubuntu: **2.4.1** (installed and validated 2026-10-23); merged source commit: [`5ab51cf0eb1f905df2cd0bdf184ea549bf1ac025`](https://github.com/evgendman/jacred2prowlarr/commit/5ab51cf0eb1f905df2cd0bdf184ea549bf1ac025); [CI run #37 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39947121004) (Python compilation and all 37 tests).
 
+Candidate **v2.4.2** adds labelled RuTracker season/episode parsing (`Сезон: 1 / Серии: 1-4 из 4` → `S01E01-04`) and canonical DVD source markers. Implementation and regression tests passed [CI run #41](https://github.com/evgendman/jacred2prowlarr/actions/runs/39947953925) (Python compilation and all 43 tests) on branch [`fix/rutracker-title-normalization-2.4.2`](https://github.com/evgendman/jacred2prowlarr/tree/fix/rutracker-title-normalization-2.4.2). Production remains on v2.4.1 pending deployment-side verification.
+
 Version **2.4.1** fixes ffprobe stream selection when JacRed exposes a large attached cover/image as `codec_type=video`. The fix has passed CI and was installed on MINI-Ubuntu on 2026-10-23. Deployment log: `jacred2prowlarr-2.4.1-deploy.log` (37 tests passed; service active; Torznab caps and synthetic movie checks returned HTTP 200). The v2.4.1 change set is tracked in [PR #5](https://github.com/evgendman/jacred2prowlarr/pull/5).
 
 ## Project goal
@@ -76,17 +78,18 @@ The current `first_video_stream()` filters on `codec_type == "video"` and exclud
 - [x] Deploy v2.4.1 on MINI-Ubuntu on 2026-10-23. Captured terminal output confirms version 2.4.1 is running, systemd reports `active/running` with `Result=success`, and local Torznab `caps` plus synthetic movie connectivity checks both returned HTTP 200. Detailed terminal output is saved in `jacred2prowlarr-2.4.1-deploy.log` in the user's Trace library.
 - [x] Manual real-release check confirmed by the user after deployment: the known RuTracker release `Бременские музыканты (2023) WEB-DL 1080p | Original | 5.1 E-AC3 Audio *** Бременские музыканты / 2023 / РУ / WEB-DL (1080p)` now works; the adapter no longer misclassifies the attached image as 2160p.
 
-## Planned: RuTracker release-title normalization gap
+## v2.4.2 candidate: RuTracker release-title normalization
 
 **Observed example:** `Lexx (1997) 480p | ТВ6 *** Лексс / Lexx / Сезон: 1 / Серии: 1-4 из 4 ... [1997, ... DVD5] MVO (ТВ6)`.
 
 The currently documented parser covers formats such as `6 сезон (1-22 из 22)` and `S11E01-10`, but does not yet cover the labelled RuTracker notation `Сезон: 1 / Серии: 1-4 из 4`. The source-format parser also needs to recognize the explicit `DVD5` marker so it can be placed in the normalized title.
 
-- [ ] Parse the labelled Russian season/episode notation, including whitespace and punctuation variants, into `S01E01-04`.
-- [ ] Recognize `DVD5` as a release/source-format marker. Consider `DVD9`, `DVDRip` and `DVD` explicitly and test that each remains distinguishable.
-- [ ] Add fixture-based regression tests for the full release title, including year `1997`, quality `480p`, the `ТВ6` voice marker from `MVO (ТВ6)`, and the normalized episode range.
-- [ ] Preserve the complete original JacRed title after `***` and in the Torznab description; normalization must not discard the source details.
-- [ ] Validate the normalized result through the local Torznab endpoint and confirm how Sonarr maps the resulting series/episode range.
+- [x] Parse the labelled Russian season/episode notation, including whitespace, punctuation and dash variants, into `S01E01-04`.
+- [x] Recognize `DVD5`, `DVD9`, `DVDRip` (including `DVD-Rip`) and `DVD` as distinct canonical release/source-format markers.
+- [x] Add fixture-based regression tests for the full release title, including year `1997`, quality `480p`, the `ТВ6` voice marker from `MVO (ТВ6)`, and the normalized episode range.
+- [x] Preserve the complete original JacRed title after `***` and in the Torznab description; normalization must not discard the source details.
+- [x] CI run #41 passed Python compilation and all 43 unit tests, including six new RuTracker regression tests.
+- [ ] Deploy the candidate and validate the normalized result through the local Torznab endpoint; confirm how Sonarr maps the resulting series/episode range.
 
 Expected normalized prefix for this example:
 
