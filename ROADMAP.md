@@ -2,7 +2,7 @@
 
 [English documentation](README.md) | [Документация на русском](README.ru.md)
 
-Current release on MINI-Ubuntu: **2.4.3**. Candidate **2.4.4** ([PR #8](https://github.com/evgendman/jacred2prowlarr/pull/8)) addresses Russian season-before-episode notation observed in the Debris live search; it is not yet merged or deployed. (installed and locally validated 2026-10-23); merged source commit: [`09793668be0755f513785443ccceac48e816c891`](https://github.com/evgendman/jacred2prowlarr/commit/09793668be0755f513785443ccceac48e816c891); [CI run #49 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39952523992) (Python compilation and all 47 tests). Deployment log: `jacred2prowlarr-2.4.3-deploy.log`; targeted season/episode cases passed, service is active, and local Torznab caps/movie checks returned HTTP 200. Backup: `/tmp/jacred_v2_adapter.py.v2.4.2.20261023-172542.bak`.
+Current release on MINI-Ubuntu: **2.4.4**, installed and locally validated on 2026-10-23. The release fixes Russian season-before-episode notation observed in the live Debris search; see [PR #8](https://github.com/evgendman/jacred2prowlarr/pull/8) and merged commit [`41da7e1def834409948dbad8fa516830fd9126d1`](https://github.com/evgendman/jacred2prowlarr/commit/41da7e1def834409948dbad8fa516830fd9126d1). [CI run #51 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39964388234): compilation and all 49 tests passed. The targeted Debris title cases and feed-level preservation checks passed; the deployed service is active.
 
 Version **2.4.3** extends title parsing for season-only markers (`[S01]`, `Сезон 1`, `Season 1`), Russian labelled episodes without colons, and explicit multi-season ranges such as `Сезоны: 1-4`. For a multi-season release, a global episode total such as `1-61` is not fabricated as `S01E01-61`. [PR #7](https://github.com/evgendman/jacred2prowlarr/pull/7) is merged and the version is installed on the production host. The remaining end-to-end check is how Sonarr maps actual season-only and multi-season results.
 
@@ -123,7 +123,7 @@ Lexx (1997) 480p *** Лексс / Lexx / Сезоны: 1-4 / Серии: 1-61 и
 
 Preserve the original source title after `***` and in Torznab `description`. Episode ranges should be emitted only when the source explicitly associates them with a single season.
 
-## v2.4.4 candidate: Russian season-before-episode notation
+## v2.4.4: Russian season-before-episode notation (deployed)
 
 **Observed in the live Debris diagnostic** (`jacred-debris-output.log`, 2026-10-23): the query returned 42 releases. The individual LostFilm titles `1 сезон 12 серия` through `1 сезон 13 серия` were misread as seasons `S12` and `S13`. Titles such as `Обломки (1 сезон: 1-13 серии из 13)` were misread as a multi-season range `S01-S13`.
 
@@ -131,7 +131,7 @@ Preserve the original source title after `***` and in Torznab `description`. Epi
 - [x] Parse a range explicitly associated with one season, e.g. `1 сезон: 1-13 серии из 13`, as `S01E01-13`; keep the original source title unchanged after `***` and in Torznab `description`.
 - [x] Add unit and feed-level regression tests for the actual Debris formats.
 - [x] CI run [#51 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39964388234): Python compilation and all 49 tests passed.
-- [ ] After merge, deploy separately and verify the real Debris result list and Sonarr mapping on MINI-Ubuntu.
+- [x] Merge and deploy v2.4.4 on MINI-Ubuntu on 2026-10-23; targeted season/episode normalization and source-title preservation were validated, the service is active, and the local Torznab endpoint returned HTTP 200.
 
 The parser handles season-first range and single-episode forms before the generic season-range fallback. The existing earlier check for collection titles such as `1-4 сезоны: 1-61 серии из 61` remains first so a multi-season total is not misclassified as one season's episode range.
 
@@ -165,35 +165,31 @@ Version 2.4.0 deliberately bases HDR/SDR label normalization **only on the origi
 The labels remain **title-derived hints**, not claims that the video stream has been independently inspected. A generic `HDR` label is emitted only when the title does not specify a more concrete HDR type; `HDR+` alone is not promoted to `HDR10+`. Details and examples: [English policy](docs/hdr-title-normalization.md) and [Russian policy](docs/hdr-title-normalization.ru.md).
 
 
-## Planned: source-only HDR metadata enrichment in the normalized title
+## HDR title normalization: results of the 2026 live sample (2026-10-23)
 
-**Goal:** supplement the adapter's normalized release title with missing HDR-format labels, using only the JacRed search result already returned for that release. Do not download a torrent or video, run another `ffprobe`, or perform frame-level analysis.
+A consolidated live regression pass searched ten popular 2026 films and ten 2026 series through the local Torznab adapter. After deduplication and filtering to releases whose source year metadata was 2026, the sample contained **590 records**: 365 movie records and 225 TV records. **140 records** contained recognizable HDR/SDR markers in the source title, and all 140 retained the corresponding parsed markers in the normalized title. Marker categories overlap: SDR 39, HDR10+ 43, Dolby Vision 72, generic HDR 13, HDR10 16.
 
-### Evidence and classification
+These figures validate the existing title-based behavior on a broad, real-world sample; they are not estimates of HDR-format prevalence across all JacRed releases.
 
-- Continue using the original JacRed `Title` as the existing fallback for release-label parsing.
-- Inspect structured `ffprobe` fields only when they are already present in the current JacRed result. Do not assume optional fields exist; the currently sampled API responses included generic `info.videotype=hdr/sdr` but did not expose the fields needed to distinguish HDR subtypes reliably.
-- Do not infer a specific standard from `info.videotype`, codec, resolution or bit depth alone. If relevant evidence is missing or ambiguous, retain the current title-derived behavior and do not invent a format label.
-- When structured Dolby Vision configuration is already available, use the reported profile and base-layer compatibility identifier where present; never treat every DV profile as HDR10-compatible.
-- **Profile 8.1 title rule:** when the original release title explicitly identifies Dolby Vision Profile 8.1 (for example, `DV 8.1` or `Dolby Vision 8.1`), infer HDR10 compatibility and add `HDR10` to the normalized title if it is missing. Do not apply this inference to a bare `DV`, an unspecified Profile 8, or another DV profile without sufficient evidence.
-- Detect `HDR10+` from explicit title evidence or already-present, explicit HDR10+ metadata. Do not infer it from generic HDR or HDR10. Do not add a separate `HDR10` marker solely because HDR10+ is backward-compatible with HDR10.
+- [x] Confirm that explicit source-title markers for HDR10, HDR10+, Dolby Vision, generic HDR and SDR survive normalization in the consolidated sample (140/140 marker-bearing records).
+- [x] Confirm that original source titles remain available after `***` and in the Torznab description.
+- [x] Recheck the available structured data. In the current JacRed result schema, `info.videotype` is only generic `hdr`/`sdr`; among 76 sampled records with ffprobe stream metadata, the response did not expose the fields needed to reliably distinguish HDR subtypes (for example, `color_primaries`, `color_transfer`, `pix_fmt` or `side_data_list`).
 
-### Normalized-title output
+### Deferred: infer HDR subtypes from structured metadata
 
-- Append missing canonical markers to the **normalized title's quality segment**, after source/quality and resolution tokens where present, using the existing canonical order: `HDR10`, `HDR10+`, `Dolby Vision`.
-- Recognize existing labels case-insensitively and account for equivalent spellings such as `DoVi`; avoid duplicate labels.
-- Do not rewrite or remove source-title text. Preserve the original JacRed `Title` after the existing `***` separator and in the Torznab description.
-- Example: source title `Example Movie 2160p DV 8.1` → normalized title includes `2160p HDR10 Dolby Vision`, while the original source title remains intact after `***`.
-- These labels describe evidence available in the source metadata or release name; they must not be presented as proof that the file was independently inspected or will play correctly on every device.
+Do not implement source-only HDR subtype inference with the current schema. Generic `info.videotype`, codec, resolution and bit depth are insufficient evidence for a specific HDR standard. Reconsider this item only if the actual JacRed result starts exposing structured, relevant HDR/Dolby Vision fields consistently. No additional live probing is planned merely to search again for fields that the current schema does not return.
 
-### Acceptance tests
+### Conditional follow-up: Dolby Vision Profile 8.1 compatibility marker
 
-- [ ] Explicit `DV 8.1` / `Dolby Vision 8.1` without `HDR10` adds the missing `HDR10` marker to the normalized title.
-- [ ] Already-present HDR labels are not duplicated, and the original JacRed title remains unchanged after `***`.
-- [ ] Explicit HDR10+ is normalized as `HDR10+` without adding a redundant `HDR10` marker solely from compatibility.
-- [ ] A bare or ambiguous `DV`, an unspecified Profile 8, and Profile 5 do not trigger the Profile 8.1 HDR10 inference.
-- [ ] Missing or insufficient structured metadata does not trigger additional video/file analysis and does not create unsupported labels.
-- [ ] Existing movie and TV title-formatting paths, all resolutions, and the current title-only HDR behavior remain covered by tests.
+The representative sample already contained two explicit Profile 8.1 examples: `Project Hail Mary` and `Backrooms`. No separate live sampling campaign is needed to establish that this notation occurs in real release titles.
+
+Dolby documents Profile 8.1 as cross-compatible with HDR10 devices ([Profile overview](https://professionalsupport.dolby.com/s/article/What-is-Dolby-Vision-Profile), [Dolby Vision encoding FAQ](https://professionalsupport.dolby.com/s/article/Dolby-Vision-Encoding-using-Blackmagic-Design-DaVinci-Resolve-Studio-AQs?language=en_US)). The remaining question is not sample coverage but scoring semantics: adding a plain `HDR10` token to a Profile 8.1 title could also match a Sonarr/Radarr Custom Format intended to reward **native HDR10**, and therefore alter scores in a way that does not mean “HDR10-compatible”.
+
+- [ ] Before implementation, check the actual HDR10 Custom Format rules and decide whether the `HDR10` token denotes native HDR10 or HDR10 base-layer compatibility.
+- [ ] If compatibility should be represented independently, prefer a distinct canonical token such as `HDR10-compatible` and a matching Custom Format rather than silently treating a Dolby Vision Profile 8.1 release as native HDR10. Use the plain `HDR10` marker only if that scoring meaning is explicitly intended.
+- [ ] If this rule is approved later, validate it as part of the same code change with a few deterministic unit fixtures in the ordinary suite (explicit Profile 8.1 adds a missing compatibility marker, no duplicate, ambiguous `DV`/unspecified Profile 8/Profile 5 does not trigger inference, and the source title remains unchanged). These fixtures are regression guards for the transformation, not a separate data-collection exercise.
+
+No Profile 8.1 code change or new live-test campaign is currently scheduled. Title-derived labels remain hints based on the releaser's wording, not independent verification of the encoded stream or universal playback compatibility. Details of the existing title-only rules: [English policy](docs/hdr-title-normalization.md) and [Russian policy](docs/hdr-title-normalization.ru.md).
 
 ## v2.3.0: local source and persistent upstream protection
 
@@ -277,7 +273,7 @@ Adjust the service account and interpreter path to match the actual unit. Resett
 - TV parent category `5000` and Anime subcategory `5070`; movie parent `2000` and supported movie source categories `2010, 2020, 2030, 2040, 2045, 2050, 2060, 2070, 2080, 2090`.
 - Movie and TV records use separate title-formatting branches.
 - Movie subcategory filtering does not discard a release merely because JacRed only supplied its parent category; unsupported source details are not invented.
-- Quality detection priority remains ffprobe dimensions → JacRed `info.quality` → release title. An issue was identified on 2026-10-22: `first_video_stream()` can select a very large PNG cover/image exposed as a `video` stream instead of the actual H.264 video, causing a false `2160p` result even when JacRed's `info.quality` and the source title both indicate `1080p`. Track the fix and regression criteria in [attached-image quality detection](#planned-exclude-attached-images-from-ffprobe-quality-detection). Video resolution/codec metadata may be exposed when available. v2.4.0 normalizes title-derived `HDR10`, `HDR10+`, `Dolby Vision` / `DoVi`, generic `HDR` and `SDR` markers into the normalized title. A further planned improvement to infer HDR10 compatibility from an explicitly named Dolby Vision Profile 8.1 is tracked below; these remain title-derived or source-metadata-derived hints, not independent verification of video playback.
+- Quality detection priority remains ffprobe dimensions → JacRed `info.quality` → release title. An issue was identified on 2026-10-22: `first_video_stream()` can select a very large PNG cover/image exposed as a `video` stream instead of the actual H.264 video, causing a false `2160p` result even when JacRed's `info.quality` and the source title both indicate `1080p`. Track the fix and regression criteria in [attached-image quality detection](#planned-exclude-attached-images-from-ffprobe-quality-detection). Video resolution/codec metadata may be exposed when available. v2.4.0 normalizes title-derived `HDR10`, `HDR10+`, `Dolby Vision` / `DoVi`, generic `HDR` and `SDR` markers into the normalized title. A conditional Profile 8.1 compatibility-marker follow-up is tracked below and is gated on the meaning of the HDR10 Custom Format in Sonarr/Radarr; these labels remain title-derived or source-metadata-derived hints, not independent verification of video playback.
 - Voice metadata is taken in priority order from Russian audio-stream tags in ffprobe, JacRed `info.voices`, or supported MVO patterns in the source title. Available language information is also exposed in Torznab metadata.
 - Formatted title retains the original source title after `***` when it differs from the normalized title, and the original title is also the Torznab description.
 - Standard torrent enclosure MIME type, magnet URL, infohash and source date parsing.
