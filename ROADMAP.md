@@ -2,7 +2,7 @@
 
 [English documentation](README.md) | [Документация на русском](README.ru.md)
 
-Current release on MINI-Ubuntu: **2.4.1** (installed and validated 2026-10-23); candidate source commit: [`866cfa086a64aa15b1a95aee3bc1c6e2041fc740`](https://github.com/evgendman/jacred2prowlarr/commit/866cfa086a64aa15b1a95aee3bc1c6e2041fc740); [CI run #36 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39944532848) (Python compilation and all 37 tests).
+Current release on MINI-Ubuntu: **2.4.1** (installed and validated 2026-10-23); merged source commit: [`5ab51cf0eb1f905df2cd0bdf184ea549bf1ac025`](https://github.com/evgendman/jacred2prowlarr/commit/5ab51cf0eb1f905df2cd0bdf184ea549bf1ac025); [CI run #37 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39947121004) (Python compilation and all 37 tests).
 
 Version **2.4.1** fixes ffprobe stream selection when JacRed exposes a large attached cover/image as `codec_type=video`. The fix has passed CI and was installed on MINI-Ubuntu on 2026-10-23. Deployment log: `jacred2prowlarr-2.4.1-deploy.log` (37 tests passed; service active; Torznab caps and synthetic movie checks returned HTTP 200). The v2.4.1 change set is tracked in [PR #5](https://github.com/evgendman/jacred2prowlarr/pull/5).
 
@@ -74,6 +74,7 @@ The current `first_video_stream()` filters on `codec_type == "video"` and exclud
 - [x] Test fallback behavior when no valid moving-video stream remains: use a valid JacRed `info.quality`, and only then parse resolution from the release title.
 - [x] Run the complete unit suite and verify normalized title and Torznab quality/resolution attributes in the regression fixture. CI run #36 passed compilation and all 37 tests.
 - [x] Deploy v2.4.1 on MINI-Ubuntu on 2026-10-23. Captured terminal output confirms version 2.4.1 is running, systemd reports `active/running` with `Result=success`, and local Torznab `caps` plus synthetic movie connectivity checks both returned HTTP 200. Detailed terminal output is saved in `jacred2prowlarr-2.4.1-deploy.log` in the user's Trace library.
+- [x] Manual real-release check confirmed by the user after deployment: the known RuTracker release `Бременские музыканты (2023) WEB-DL 1080p | Original | 5.1 E-AC3 Audio *** Бременские музыканты / 2023 / РУ / WEB-DL (1080p)` now works; the adapter no longer misclassifies the attached image as 2160p.
 
 ## Planned: RuTracker release-title normalization gap
 
