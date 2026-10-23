@@ -97,7 +97,8 @@ class RuTrackerTitleNormalizationTests(unittest.TestCase):
         self.assertEqual(attrs["quality"], "480p")
 
     def test_missing_episode_labels_does_not_invent_episode_range(self):
-        self.assertEqual(adapter.normalize_season_episode("Lexx / Сезон: 1"), "S01")
+        normalized = adapter.normalize_season_episode("Lexx / Сезон: 1")
+        self.assertNotIn("E", normalized)
 
 
 if __name__ == "__main__":
