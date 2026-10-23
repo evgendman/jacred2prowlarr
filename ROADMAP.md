@@ -4,7 +4,7 @@
 
 Current release on MINI-Ubuntu: **2.4.2** (installed and validated 2026-10-23); merged source commit: [`56de4b4187f345fd3cbaf424da41e3d60d7bd634`](https://github.com/evgendman/jacred2prowlarr/commit/56de4b4187f345fd3cbaf424da41e3d60d7bd634); [CI run #43 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39948092889) (Python compilation and all 43 tests). Deployment log: `jacred2prowlarr-2.4.2-deploy.log`; service active, Lexx sample normalizes as expected, and local Torznab checks returned HTTP 200.
 
-Candidate **v2.4.3** extends title parsing for season-only markers (`[S01]`, `Сезон 1`, `Season 1`), labelled episodes without colons, and explicit multi-season ranges such as `Сезоны: 1-4`. For a multi-season release, a global episode total such as `1-61` must not be fabricated as `S01E01-61`. Regression coverage is in [PR #7](https://github.com/evgendman/jacred2prowlarr/pull/7); production remains on v2.4.2 pending candidate CI and deployment verification.
+Candidate **v2.4.3** extends title parsing for season-only markers (`[S01]`, `Сезон 1`, `Season 1`), labelled episodes without colons, and explicit multi-season ranges such as `Сезоны: 1-4`. For a multi-season release, a global episode total such as `1-61` must not be fabricated as `S01E01-61`. Regression coverage is in [PR #7](https://github.com/evgendman/jacred2prowlarr/pull/7); production remains on v2.4.2 pending deployment verification.
 
 Version **2.4.1** fixes ffprobe stream selection when JacRed exposes a large attached cover/image as `codec_type=video`. The fix has passed CI and was installed on MINI-Ubuntu on 2026-10-23. Deployment log: `jacred2prowlarr-2.4.1-deploy.log` (37 tests passed; service active; Torznab caps and synthetic movie checks returned HTTP 200). The v2.4.1 change set is tracked in [PR #5](https://github.com/evgendman/jacred2prowlarr/pull/5).
 
@@ -107,7 +107,8 @@ The title supplied in chat may contain Markdown/link/table wrappers. Tests must 
 - [ ] Accept Russian season/episode labels with or without colons, e.g. `Сезон 1 / Серии 1-4`.
 - [ ] Convert explicit multi-season ranges such as `Сезон: 1-4 из 4` or `Сезоны: 1-2` to `S01-S04` / `S01-S02`; do not encode a cross-season episode total as a single-season episode range.
 - [ ] Handle contiguous explicit lists such as `[s3,s4]` as `S03-S04`, while avoiding fabricated ranges for non-contiguous lists.
-- [ ] Run Python compilation and the complete unit-test suite in CI; deploy only after CI passes and then validate representative real results through the local Torznab endpoint.
+- [x] CI run [#47 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39952325092): Python compilation and all 47 unit tests succeeded.
+- [ ] Deploy v2.4.3 and validate representative real results through the local Torznab endpoint; confirm Sonarr maps season-only and multi-season results correctly.
 
 Expected examples:
 
