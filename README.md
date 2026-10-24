@@ -4,7 +4,7 @@
 
 **JacRed v2 JSON → Torznab adapter for Prowlarr, Sonarr and Radarr.**
 
-Current version: **2.4.3**
+Current version: **2.4.5**
 
 The adapter turns JacRed's Russian-tracker release data into consistent Torznab results that the *Arr applications can parse and rank more reliably. It is intended to bridge two gaps: Russian release titles do not always follow the naming patterns expected by Sonarr/Radarr, and a direct indexer connectivity test may fail when the upstream returns no real result for an empty search.
 
@@ -27,6 +27,11 @@ This adapter:
 
 The adapter does **not** choose the final release itself. It makes the title and metadata easier for Sonarr/Radarr to understand; Quality Profiles and Custom Formats in those applications make the final decision.
 
+## Shared Apprise notifications
+
+The adapter sends actionable upstream and startup errors through the shared Apprise API; it does not store Telegram tokens, chat IDs or topic IDs. Notifications are enabled by default and use `http://192.168.0.14:8000/notify/arr-stack`, with `warnings` for recoverable failures and `critical` for access blocks, manual-review states and adapter startup failures. Delivery is best-effort with a bounded timeout and never changes the Torznab response or upstream protection logic. Repeated unchanged incidents are suppressed in the persistent SQLite notification state; upstream recovery makes a later recurrence eligible to notify again. Messages intentionally omit release titles, hashes, magnets, API keys and credential-bearing URLs.
+
+Configuration can be overridden through the service environment: `JACRED_NOTIFICATIONS_ENABLED=0` disables notifications, `JACRED_APPRISE_URL` changes the Apprise base URL, `JACRED_APPRISE_CONFIG_KEY` changes the shared config key, `JACRED_NOTIFICATION_TAG_WARNINGS` and `JACRED_NOTIFICATION_TAG_CRITICAL` change routing tags, and `JACRED_NOTIFICATION_TIMEOUT_SECONDS` sets the HTTP timeout (1–30 seconds). Defaults match the existing media-server notification contract.
 ## Data flow
 
 ```text
@@ -104,7 +109,7 @@ Quality detection uses this priority:
 2. JacRed `info.quality`;
 3. an explicit resolution marker in the release title.
 
-Streams explicitly marked as attached pictures and known still-image codecs (including PNG) are excluded from video-quality selection. This avoids mistaking a high-resolution poster or cover for the actual video. If no valid moving-video stream remains, the adapter falls back to JacRed metadata and then the release title. This retains useful quality information even when a Russian release title omits an explicit resolution token. HDR/SDR labels are extracted from the original release title only and normalized as `HDR10`, `HDR10+`, `Dolby Vision`, generic `HDR`, or explicit `SDR`. The labels are emitted at any resolution, and combined markers are retained when explicitly named (for example, `2160p HDR10+ Dolby Vision`). The adapter does not infer an HDR subtype from `info.videotype`, codec, bit depth or resolution; the markers are title-derived hints, not verification of the encoded stream. See [HDR title normalization](docs/hdr-title-normalization.md). The adapter also emits resolution/video-codec attributes where ffprobe provides them.
+Streams explicitly marked as attached pictures and known still-image codecs (including PNG) are excluded from video-quality selection. This avoids mistaking a high-resolution poster or cover for the actual video. If no valid moving-video stream remains, the adapter falls back to JacRed metadata and then the release title. This retains useful quality information even when a Russian release title omits an explicit resolution token. HDR/SDR labels are derived from the original release title and normalized as `HDR10`, `HDR10+`, `Dolby Vision`, generic `HDR`, or explicit `SDR`. If the title explicitly identifies Dolby Vision Profile 8.1 (`DV 8.1`, `DV Profile 8.1`, `DoVi P8.1` or `Dolby Vision Profile 8.1`), the normalized title also includes `HDR10` for its HDR10-compatible base layer while retaining `Dolby Vision`. This inference is not applied to an ambiguous `DV`, an unspecified Profile 8, or another profile. The adapter does not infer HDR subtypes from `info.videotype`, codec, bit depth or resolution alone; labels remain title-derived hints rather than independent stream verification. See [HDR title normalization](docs/hdr-title-normalization.md). The adapter also emits resolution/video-codec attributes where ffprobe provides them.
 
 Other protocol details include the standard `application/x-bittorrent` enclosure MIME type, magnet URL and infohash attributes, and date handling for JacRed RFC3339/RFC3339Nano timestamps. Malformed or absent source dates are not replaced with the current time. Duplicate merged results are removed by infohash where possible.
 
