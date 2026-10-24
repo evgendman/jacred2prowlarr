@@ -132,13 +132,27 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(payload["type"], "failure")
         self.assertIn("HTTP 403", payload["body"])
 
+    def test_recoverable_alerts_are_scoped_to_the_affected_media_branch(self):
+        with mock.patch.object(adapter, "send_notification_once") as send:
+            adapter.notify_upstream_problem(TimeoutError("simulated timeout"), "movie")
+            self.assertEqual(
+                send.call_args.args[0],
+                "upstream:branch:movie:transport",
+            )
+            send.reset_mock()
+            adapter.notify_upstream_problem(TimeoutError("simulated timeout"), "tv")
+            self.assertEqual(
+                send.call_args.args[0],
+                "upstream:branch:tv:transport",
+            )
+
     def test_upstream_403_is_critical_and_429_is_a_warning(self):
         with mock.patch.object(adapter, "send_notification_once") as send:
             adapter.notify_upstream_problem(
                 adapter.UpstreamCoolingDown(86400, "JacRed HTTP 403; upstream circuit OPEN for at least 24 hours"),
                 "tv",
             )
-            self.assertEqual(send.call_args.args[0], "upstream:access-block")
+            self.assertEqual(send.call_args.args[0], "upstream:global:access-block")
             self.assertEqual(send.call_args.args[4], "critical")
             self.assertEqual(send.call_args.args[5], "failure")
 
@@ -147,7 +161,7 @@ class NotificationTests(unittest.TestCase):
                 adapter.UpstreamCoolingDown(300, "JacRed HTTP 429 (stage 2); all upstream requests paused"),
                 "movie",
             )
-            self.assertEqual(send.call_args.args[0], "upstream:rate-limit")
+            self.assertEqual(send.call_args.args[0], "upstream:global:rate-limit")
             self.assertEqual(send.call_args.args[4], "warnings")
             self.assertEqual(send.call_args.args[5], "warning")
 
