@@ -2,9 +2,9 @@
 
 [English documentation](README.md) | [Документация на русском](README.ru.md)
 
-Current release on MINI-Ubuntu: **2.4.4**, installed and locally validated on 2026-10-23. The release fixes Russian season-before-episode notation observed in the live Debris search; see [PR #8](https://github.com/evgendman/jacred2prowlarr/pull/8) and merged commit [`41da7e1def834409948dbad8fa516830fd9126d1`](https://github.com/evgendman/jacred2prowlarr/commit/41da7e1def834409948dbad8fa516830fd9126d1). [CI run #51 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39964388234): compilation and all 49 tests passed. The targeted Debris title cases and feed-level preservation checks passed; the deployed service is active.
+Current release on MINI-Ubuntu remains **2.4.4** until deployment. Candidate **2.4.5** is on [feature/v2.4.5-debris-notifications-hdr](https://github.com/evgendman/jacred2prowlarr/tree/feature/v2.4.5-debris-notifications-hdr): Debris orphaned-parenthesis cleanup, no-server mock tests for queue-lock expiry/transport timeout/partial branch failure, shared Apprise notifications and explicit Dolby Vision Profile 8.1 → HDR10 compatibility labeling. CI review and production deployment are pending.
 
-Version **2.4.3** extends title parsing for season-only markers (`[S01]`, `Сезон 1`, `Season 1`), Russian labelled episodes without colons, and explicit multi-season ranges such as `Сезоны: 1-4`. For a multi-season release, a global episode total such as `1-61` is not fabricated as `S01E01-61`. [PR #7](https://github.com/evgendman/jacred2prowlarr/pull/7) is merged and the version is installed on the production host. The remaining end-to-end check is how Sonarr maps actual season-only and multi-season results.
+Version **2.4.3** extends title parsing for season-only markers (`[S01]`, `Сезон 1`, `Season 1`), Russian labelled episodes without colons, and explicit multi-season ranges such as `Сезоны: 1-4`. For a multi-season release, a global episode total such as `1-61` is not fabricated as `S01E01-61`. [PR #7](https://github.com/evgendman/jacred2prowlarr/pull/7) is merged and the version is installed on the production host. Manual visual review in Sonarr on 2026-10-24 covered Debris, Lexx and other representative results; season association was broadly correct. A remaining orphaned parenthesis in some Debris names is targeted by candidate v2.4.5.
 
 Version **2.4.1** fixes ffprobe stream selection when JacRed exposes a large attached cover/image as `codec_type=video`. The fix has passed CI and was installed on MINI-Ubuntu on 2026-10-23. Deployment log: `jacred2prowlarr-2.4.1-deploy.log` (37 tests passed; service active; Torznab caps and synthetic movie checks returned HTTP 200). The v2.4.1 change set is tracked in [PR #5](https://github.com/evgendman/jacred2prowlarr/pull/5).
 
@@ -55,9 +55,9 @@ The v2.4.0 release and its HDR-specific acceptance checks are complete. The item
    - Prowlarr;
    - Sonarr 1080p and 4K;
    - Radarr 1080p and 4K.
-2. **Cross-client/cache regression.** For the same title searched by multiple clients and quality tiers, verify that the shared raw-source cache avoids redundant identical JacRed queries while distinct local filters still produce correct independent result pages.
+2. **Cross-client/cache behavior — accepted as complete for this stage.** Existing journal entries prove both rendered-response `CACHE HIT` and raw-source `SOURCE CACHE HIT` during repeated real searches (including repeated Debris and Tulsa King searches). Per user decision on 2026-10-24, no additional independent-filter test matrix is planned at this stage.
 3. **Combined automatic selection.** HDR title normalization and the relevant Sonarr/Radarr behavior have been checked. The broader combined ranking path still needs an explicitly recorded end-to-end case covering preferred voice/dubbing scores together with resolution, source format and HDR. Scoring policy belongs to Sonarr/Radarr.
-4. **Remaining mock-upstream failure cases.** The automated suite already covers HTTP 429 and both `Retry-After` formats, HTTP 403/401, persisted protection state, single HALF_OPEN probing, cache behavior while OPEN, serialized requests and a combined-search abort on 403. Add explicit local-mock cases for queue-wait expiration/HTTP 503, upstream timeouts, and partial movie/TV branch failures. Do not use public JacRed to generate failure cases. Any real-source recovery check must be a single controlled attempt after the protection period.
+4. **Mock-upstream failure coverage.** The v2.4.5 candidate adds tests using Python mocks only (no separate test HTTP server): queue-lock expiry without a network request, a simulated upstream transport timeout, failure non-caching, and a movie-branch timeout with a successful TV result preserved. Existing protection tests continue to use their pre-existing local HTTP harness; no new test server was added.
 
 
 ## v2.4.1 candidate: exclude attached images from ffprobe quality detection
@@ -135,9 +135,11 @@ Preserve the original source title after `***` and in Torznab `description`. Epi
 
 The parser handles season-first range and single-episode forms before the generic season-range fallback. The existing earlier check for collection titles such as `1-4 сезоны: 1-61 серии из 61` remains first so a multi-season total is not misclassified as one season's episode range.
 
-## Planned: Telegram error and warning notifications through the shared gateway
+## Apprise error and warning notifications (candidate v2.4.5)
 
-Use the approved shared notification-gateway contract rather than adding direct Telegram bot credentials or per-adapter chat configuration.
+The v2.4.5 candidate implements the shared notification-gateway contract without direct Telegram bot credentials or per-adapter chat configuration. Configuration uses `http://192.168.0.14:8000/notify/arr-stack`, the `warnings` tag for recoverable conditions and `critical` for access/manual-review/startup failures, a bounded five-second timeout, and persistent SQLite deduplication. Delivery is best-effort; messages omit secrets, release names, hashes and magnets. Unit tests mock the Apprise HTTP call, with no test server.
+
+Implementation and deployment are pending CI review; do not mark this feature deployed before the release script verifies service health.
 
 - [ ] Send terminal/fatal errors using the shared `critical` tag; send recoverable warnings using `warnings`.
 - [ ] Route notifications through the shared Apprise API using configurable `apprise_url` and the agreed `arr-stack` configuration key. The gateway, not this adapter, owns Telegram bot credentials and the mapping to the approved Telegram forum topics (including `Предупреждения` and `Информация о выполнении`).
@@ -179,9 +181,9 @@ These figures validate the existing title-based behavior on a broad, real-world 
 
 Do not implement source-only HDR subtype inference with the current schema. Generic `info.videotype`, codec, resolution and bit depth are insufficient evidence for a specific HDR standard. Reconsider this item only if the actual JacRed result starts exposing structured, relevant HDR/Dolby Vision fields consistently. No additional live probing is planned merely to search again for fields that the current schema does not return.
 
-### Conditional follow-up: Dolby Vision Profile 8.1 compatibility marker
+### Dolby Vision Profile 8.1 compatibility marker (candidate v2.4.5)
 
-The representative sample already contained two explicit Profile 8.1 examples: `Project Hail Mary` and `Backrooms`. No separate live sampling campaign is needed to establish that this notation occurs in real release titles.
+The representative sample already contained two explicit Profile 8.1 examples: `Project Hail Mary` and `Backrooms`. No separate live sampling campaign is needed. The v2.4.5 candidate adds `HDR10` when a release title explicitly states Profile 8.1 and retains `Dolby Vision`; ambiguous `DV`, unspecified Profile 8, and other profiles do not trigger this inference. Deterministic unit coverage is included; CI and deployment remain pending.
 
 Dolby documents Profile 8.1 as cross-compatible with HDR10 devices ([Profile overview](https://professionalsupport.dolby.com/s/article/What-is-Dolby-Vision-Profile), [Dolby Vision encoding FAQ](https://professionalsupport.dolby.com/s/article/Dolby-Vision-Encoding-using-Blackmagic-Design-DaVinci-Resolve-Studio-AQs?language=en_US)). The remaining question is not sample coverage but scoring semantics: adding a plain `HDR10` token to a Profile 8.1 title could also match a Sonarr/Radarr Custom Format intended to reward **native HDR10**, and therefore alter scores in a way that does not mean “HDR10-compatible”.
 

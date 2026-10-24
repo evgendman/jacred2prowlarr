@@ -10,7 +10,7 @@ These are **title-derived hints**, not a claim that the encoded video stream was
 
 | Label in normalized title | Source-title evidence |
 |---|---|
-| `HDR10` | Explicit `HDR10` token that is not the prefix of `HDR10+` |
+| `HDR10` | Explicit `HDR10` token that is not the prefix of `HDR10+`, or an explicit Dolby Vision Profile 8.1 marker establishing an HDR10-compatible base layer |
 | `HDR10+` | Explicit `HDR10+` or `HDR10 Plus` token |
 | `Dolby Vision` | Explicit `Dolby Vision` or `DoVi`; a `DV` token only with a profile/version or a same-title HDR/UHD clue |
 | `HDR` | Generic `HDR` / `HDR+` token when no more specific HDR type is named |
@@ -34,4 +34,5 @@ If quality cannot be established, title-derived labels are still retained. The o
 - Sonarr/Radarr Custom Formats can match stable, canonical tokens in the normalized title.
 - A release explicitly labelled `HDR10+ Dolby Vision` retains both labels; the adapter does not add a second standard that is absent from the source title.
 - An `info.videotype=hdr` value with no HDR marker in `Title` does not cause an HDR label to be synthesized.
+- An explicit Profile 8.1 title marker (`DV 8.1`, `DV Profile 8.1`, `DoVi P8.1`, or `Dolby Vision Profile 8.1`) adds `HDR10` as a compatibility marker if missing while retaining `Dolby Vision`. Bare `DV`, unspecified Profile 8, and other profiles do not trigger this inference.
 - The presence of a marker does not prove the file contains that format. The source may be mislabeled; title-only classification intentionally preserves the publisher/releaser claim without pretending to validate the stream.

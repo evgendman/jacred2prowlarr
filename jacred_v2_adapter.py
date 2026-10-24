@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9128
-VERSION = "2.4.4"
+VERSION = "2.4.5"
 SERVER_TITLE = "JacRed TV + Movies"
 CACHE_TTL_SECONDS = max(1, int(os.environ.get("JACRED_CACHE_TTL_SECONDS", "180")))
 CACHE_MAX_ENTRIES = max(1, int(os.environ.get("JACRED_CACHE_MAX_ENTRIES", "512")))
@@ -58,6 +58,29 @@ JACRED_URL = os.environ.get(
     "http://127.0.0.1:9117/api/v2.0/indexers/all/results",
 ).strip() or "http://127.0.0.1:9117/api/v2.0/indexers/all/results"
 JACRED_URL = JACRED_URL.rstrip("?&")
+
+# Shared Apprise API notifications; no Telegram credentials are stored in this adapter.
+JACRED_NOTIFICATIONS_ENABLED = os.environ.get(
+    "JACRED_NOTIFICATIONS_ENABLED", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+JACRED_APPRISE_URL = os.environ.get(
+    "JACRED_APPRISE_URL", "http://192.168.0.14:8000"
+).strip().rstrip("/")
+JACRED_APPRISE_CONFIG_KEY = os.environ.get(
+    "JACRED_APPRISE_CONFIG_KEY", "arr-stack"
+).strip()
+JACRED_NOTIFICATION_TAG_WARNINGS = os.environ.get(
+    "JACRED_NOTIFICATION_TAG_WARNINGS", "warnings"
+).strip()
+JACRED_NOTIFICATION_TAG_CRITICAL = os.environ.get(
+    "JACRED_NOTIFICATION_TAG_CRITICAL", "critical"
+).strip()
+JACRED_NOTIFICATION_TIMEOUT_SECONDS = max(
+    1, min(30, int(os.environ.get("JACRED_NOTIFICATION_TIMEOUT_SECONDS", "5")))
+)
+NOTIFICATION_STATE_LOCK = threading.Lock()
+NOTIFICATION_STATE_MEMORY = {}
+
 TORZNAB_NS = "http://torznab.com/schemas/2015/feed"
 
 TV_CATEGORIES = {5000, 5070}
@@ -904,7 +927,19 @@ def hdr_markers(source_title):
         return []
 
     hdr10_plus = bool(re.search(r"(?i)(?<!\w)HDR\s*10\s*(?:\+|PLUS)(?!\w)", text))
-    hdr10 = bool(re.search(r"(?i)(?<!\w)HDR\s*10(?!\s*(?:\+|PLUS)|\w)", text))
+    dv_designator = r"(?:DV|DOVI|DOLBY[\s._-]*VISION)"
+    dv_profile_8_1 = bool(
+        re.search(
+            rf"(?i)(?<!\w){dv_designator}\s*(?:(?:PROFILE|PROF)\s*)?(?:P\s*)?8\.1(?!\w)",
+            text,
+        )
+    )
+    # Profile 8.1 has an HDR10-compatible base layer. Infer the HDR10 marker
+    # only when that profile is explicitly stated in the original release title.
+    hdr10 = bool(
+        re.search(r"(?i)(?<!\w)HDR\s*10(?!\s*(?:\+|PLUS)|\w)", text)
+        or dv_profile_8_1
+    )
     generic_hdr = bool(re.search(r"(?i)(?<!\w)HDR(?!\w)", text))
     explicit_dolby_vision = bool(
         re.search(r"(?i)(?<!\w)DOLBY[\s._-]*VISION(?!\w)", text)
@@ -914,7 +949,12 @@ def hdr_markers(source_title):
     # "DV" is overloaded, so accept it only when paired with a Dolby Vision
     # profile/version or another strong HDR/UHD marker in the same title.
     dv_token = bool(re.search(r"(?i)(?<!\w)DV(?!\w)", text))
-    dv_profile = bool(re.search(r"(?i)(?<!\w)DV\s*(?:P\s*)?\d+(?:\.\d+)?(?!\w)", text))
+    dv_profile = bool(
+        re.search(
+            rf"(?i)(?<!\w){dv_designator}\s*(?:(?:PROFILE|PROF)\s*)?(?:P\s*)?\d+(?:\.\d+)?(?!\w)",
+            text,
+        )
+    )
     dv_context = bool(
         hdr10_plus
         or hdr10
@@ -1352,10 +1392,25 @@ def with_canonical_tv_title(item, canonical_title):
 
 
 def normalize_tv_original(text):
+    # Remove a season suffix even when the source identity includes the opener
+    # before the number ("Debris (1 сезон") or English "Season 1".
+    text = re.sub(
+        r"(?i)\s*[\(\[\{]?\s*\d{1,3}\s*(?:-?(?:й|ой|ый|ого|го|ему|ому|му|м|ом|ым))?\s+сез\w*\s*[\)\]\}]?\s*$",
+        "",
+        text,
+    )
+    text = re.sub(r"(?i)\s*[\(\[\{]?\s*season\s+\d{1,3}\s*[\)\]\}]?\s*$", "", text)
     text = re.sub(r"(?i)\s*\[\s*\d{1,3}\s*[xх×]\s*\d{1,4}(?:\s*[-–—]\s*\d{1,4})?(?:\s+из\s+\d{1,4})?\s*\]", "", text)
     text = re.sub(r"(?i)\s+\bS\d{1,3}(?:E\d{1,4}(?:-\d{1,4})?)?\b", "", text)
     text = re.sub(r"(?i)\s+\b\d{1,3}\s*(?:-?(?:й|ой|ый|ого|го|ему|ому|му|м|ом|ым))?\s+сез\w*", "", text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    # Removing an inline season label can leave an empty pair or orphaned
+    # opening delimiter in a source-provided series name, e.g. "Debris (".
+    text = re.sub(r"\s*\(\s*\)\s*$", "", text)
+    text = re.sub(r"\s*\[\s*\]\s*$", "", text)
+    text = re.sub(r"\s*\{\s*\}\s*$", "", text)
+    text = re.sub(r"\s*[\(\[\{]\s*$", "", text)
+    return text.strip(" \t-–—|,:;")
 
 
 def normalize_movie_original(text):
@@ -1547,6 +1602,9 @@ def query_jacred(query, year, media_type):
             # An error must never clear the active block or failure escalation.
             if "data" in locals() and isinstance(data, dict) and isinstance(data.get("Results") or [], list):
                 register_upstream_success(probe)
+                clear_notification_state_prefix("upstream:global:")
+                clear_notification_state_prefix(f"upstream:branch:{media_type}:")
+                clear_notification_state_prefix(f"adapter:branch:{media_type}:")
             elif probe:
                 # A failed recovery probe must leave the circuit OPEN, even for
                 # transport errors or malformed JSON that are not HTTP status codes.
@@ -1555,6 +1613,366 @@ def query_jacred(query, year, media_type):
                     register_other_failure("recovery probe failed before a valid response", probe=True)
     finally:
         UPSTREAM_REQUEST_LOCK.release()
+
+
+
+
+def _notification_connection(create=True):
+    db_path = os.path.abspath(JACRED_STATE_PATH)
+    if not create and not os.path.isfile(db_path):
+        return None
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    connection = sqlite3.connect(db_path, timeout=2)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout=2000")
+    if create:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS adapter_notification_state (
+                event_key TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        connection.commit()
+    else:
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='adapter_notification_state'"
+        ).fetchone()
+        if not exists:
+            connection.close()
+            return None
+    return connection
+
+
+def _reserve_notification(event_key, fingerprint):
+    # Reserve before network I/O so concurrent requests cannot flood the same alert.
+    with NOTIFICATION_STATE_LOCK:
+        if NOTIFICATION_STATE_MEMORY.get(event_key) == fingerprint:
+            return False
+        connection = None
+        try:
+            connection = _notification_connection(create=True)
+            row = connection.execute(
+                "SELECT fingerprint FROM adapter_notification_state WHERE event_key = ?",
+                (event_key,),
+            ).fetchone()
+            if row and str(row["fingerprint"]) == fingerprint:
+                NOTIFICATION_STATE_MEMORY[event_key] = fingerprint
+                return False
+            connection.execute(
+                """
+                INSERT INTO adapter_notification_state(event_key, fingerprint, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(event_key) DO UPDATE SET
+                    fingerprint=excluded.fingerprint,
+                    updated_at=excluded.updated_at
+                """,
+                (event_key, fingerprint, time.time()),
+            )
+            connection.commit()
+        except Exception as exc:
+            # Notification state storage must never break search or protection.
+            print(
+                f"APPRISE_STATE_WARNING event={event_key} error_type={type(exc).__name__}",
+                file=sys.stderr,
+                flush=True,
+            )
+        finally:
+            if connection is not None:
+                connection.close()
+        NOTIFICATION_STATE_MEMORY[event_key] = fingerprint
+        return True
+
+
+def clear_notification_state_prefix(prefix):
+    # Clear a resolved incident after valid upstream recovery. A future recurrence
+    # should notify again, but repeated unchanged failures remain suppressed.
+    with NOTIFICATION_STATE_LOCK:
+        connection = None
+        try:
+            connection = _notification_connection(create=False)
+            if connection is None:
+                return
+            rows = connection.execute(
+                "SELECT event_key FROM adapter_notification_state WHERE event_key LIKE ?",
+                (prefix + "%",),
+            ).fetchall()
+            if rows:
+                connection.execute(
+                    "DELETE FROM adapter_notification_state WHERE event_key LIKE ?",
+                    (prefix + "%",),
+                )
+                connection.commit()
+            for key in list(NOTIFICATION_STATE_MEMORY):
+                if key.startswith(prefix):
+                    NOTIFICATION_STATE_MEMORY.pop(key, None)
+        except Exception as exc:
+            print(
+                f"APPRISE_STATE_WARNING action=clear error_type={type(exc).__name__}",
+                file=sys.stderr,
+                flush=True,
+            )
+        finally:
+            if connection is not None:
+                connection.close()
+
+
+def send_notification_once(event_key, fingerprint, title_suffix, body, tag, notify_type):
+    if not JACRED_NOTIFICATIONS_ENABLED:
+        print(
+            f"APPRISE_SKIPPED event={event_key} reason=notifications-disabled",
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+
+    parsed = urllib.parse.urlsplit(JACRED_APPRISE_URL)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or not re.fullmatch(r"[A-Za-z0-9_-]+", JACRED_APPRISE_CONFIG_KEY)
+        or not JACRED_NOTIFICATION_TAG_WARNINGS
+        or not JACRED_NOTIFICATION_TAG_CRITICAL
+    ):
+        print(
+            f"APPRISE_FAILED event={event_key} tag={tag} reason=invalid-notification-configuration",
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+
+    if not _reserve_notification(event_key, fingerprint):
+        print(
+            f"APPRISE_SUPPRESSED event={event_key} tag={tag} reason=unchanged-state",
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+
+    endpoint = (
+        JACRED_APPRISE_URL
+        + "/notify/"
+        + urllib.parse.quote(JACRED_APPRISE_CONFIG_KEY, safe="")
+    )
+    payload = json.dumps(
+        {
+            "title": f"{SERVER_TITLE} adapter — {title_suffix}",
+            "body": body,
+            "type": notify_type,
+            "tag": tag,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": f"{SERVER_TITLE}-adapter/{VERSION}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(
+            request, timeout=JACRED_NOTIFICATION_TIMEOUT_SECONDS
+        ) as response:
+            response.read(2048)
+            status = int(response.getcode())
+        if 200 <= status < 300:
+            print(
+                f"APPRISE_SENT event={event_key} tag={tag} status={status}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return True
+        print(
+            f"APPRISE_FAILED event={event_key} tag={tag} http_status={status}",
+            file=sys.stderr,
+            flush=True,
+        )
+    except urllib.error.HTTPError as exc:
+        print(
+            f"APPRISE_FAILED event={event_key} tag={tag} http_status={exc.code}",
+            file=sys.stderr,
+            flush=True,
+        )
+    except Exception as exc:
+        # Never send a notification about notification delivery failure itself.
+        print(
+            f"APPRISE_FAILED event={event_key} tag={tag} error_type={type(exc).__name__}",
+            file=sys.stderr,
+            flush=True,
+        )
+    return False
+
+
+def notify_upstream_problem(exc, media_type=""):
+    message = str(exc)
+    lower = message.lower()
+    status_match = re.search(r"(?i)\bHTTP\s+(401|403|429|5\d\d)\b", message)
+    status = int(status_match.group(1)) if status_match else None
+    branch_label = {
+        "movie": "ветка поиска фильмов",
+        "tv": "ветка поиска сериалов",
+    }.get(media_type, "общая проверка upstream")
+
+    if status == 401 or "manual authentication/configuration review" in lower:
+        event_key = "upstream:global:authentication"
+        fingerprint = "http-401-manual-review"
+        tag = JACRED_NOTIFICATION_TAG_CRITICAL
+        notify_type = "failure"
+        title = "Критическая ошибка: требуется проверка доступа к JacRed"
+        body = (
+            f"{branch_label}: JacRed вернул HTTP 401. Запросы к источнику отключены "
+            "до ручной проверки аутентификации/конфигурации. Подробности — в журнале службы."
+        )
+    elif status == 403:
+        manual = "manual review" in lower
+        event_key = "upstream:global:access-block"
+        fingerprint = "http-403-manual-review" if manual else "http-403-protection-block"
+        tag = JACRED_NOTIFICATION_TAG_CRITICAL
+        notify_type = "failure"
+        title = (
+            "Критическая ошибка: JacRed требует ручной проверки"
+            if manual
+            else "Критическая ошибка: JacRed ограничил доступ"
+        )
+        body = (
+            f"{branch_label}: JacRed вернул HTTP 403; защитный блок включён. "
+            + (
+                "Автоматическое восстановление запрещено, требуется ручная проверка. "
+                if manual
+                else "Следующая проверка возможна только после защитной паузы. "
+            )
+            + "Не сбрасывайте блокировку без проверки причины. Подробности — в журнале службы."
+        )
+    elif status == 429:
+        stage_match = re.search(r"(?i)\bstage\s+(\d+)", message)
+        stage = int(stage_match.group(1)) if stage_match else 1
+        event_key = "upstream:global:rate-limit"
+        fingerprint = f"http-429-stage-{stage}"
+        tag = JACRED_NOTIFICATION_TAG_WARNINGS
+        notify_type = "warning"
+        title = "Предупреждение: JacRed ограничил частоту запросов"
+        body = (
+            f"{branch_label}: получен HTTP 429, ступень задержки {stage}. "
+            "Адаптер соблюдает период ожидания и ограничивает новые обращения. "
+            "Подробности — в журнале службы."
+        )
+    elif "queue" in lower or "maximum queue wait" in lower or "deferred for" in lower:
+        event_key = f"upstream:branch:{media_type or 'generic'}:queue"
+        fingerprint = "queue-wait-exceeded"
+        tag = JACRED_NOTIFICATION_TAG_WARNINGS
+        notify_type = "warning"
+        title = "Предупреждение: очередь запросов JacRed перегружена"
+        body = (
+            f"{branch_label}: ожидание свободного слота upstream превысило допустимое время. "
+            "Адаптер вернул временную ошибку и не запустил лишний запрос. "
+            "Подробности — в журнале службы."
+        )
+    elif (
+        isinstance(exc, (TimeoutError, ConnectionError, OSError, urllib.error.URLError))
+        or "timeout" in lower
+        or "timed out" in lower
+    ):
+        event_key = f"upstream:branch:{media_type or 'generic'}:transport"
+        fingerprint = f"transport-{type(exc).__name__}"
+        tag = JACRED_NOTIFICATION_TAG_WARNINGS
+        notify_type = "warning"
+        title = "Предупреждение: временная ошибка соединения с JacRed"
+        body = (
+            f"{branch_label}: запрос к источнику не завершился успешно "
+            f"({type(exc).__name__}). Адаптер сохранит защитное поведение и повторит поиск "
+            "при следующем обращении. Подробности — в журнале службы."
+        )
+    elif status is not None:
+        event_key = f"upstream:branch:{media_type or 'generic'}:http-error"
+        fingerprint = f"http-{status}"
+        tag = JACRED_NOTIFICATION_TAG_WARNINGS
+        notify_type = "warning"
+        title = f"Предупреждение: ошибка HTTP {status} от JacRed"
+        body = (
+            f"{branch_label}: JacRed вернул HTTP {status}. "
+            "Проверьте доступность источника и журнал службы."
+        )
+    elif isinstance(exc, UpstreamCoolingDown):
+        event_key = f"upstream:branch:{media_type or 'generic'}:protection"
+        fingerprint = f"cooldown-{type(exc).__name__}"
+        tag = JACRED_NOTIFICATION_TAG_WARNINGS
+        notify_type = "warning"
+        title = "Предупреждение: активна защитная пауза JacRed"
+        body = (
+            f"{branch_label}: адаптер временно приостановил запросы к источнику. "
+            "Проверьте состояние upstream в журнале службы."
+        )
+    else:
+        event_key = f"adapter:branch:{media_type or 'generic'}:request-error"
+        fingerprint = f"request-error-{type(exc).__name__}"
+        tag = JACRED_NOTIFICATION_TAG_CRITICAL
+        notify_type = "failure"
+        title = "Критическая ошибка обработки поиска"
+        body = (
+            f"{branch_label}: во время обработки поискового запроса возникла ошибка "
+            f"{type(exc).__name__}. Подробности — в журнале службы."
+        )
+
+    return send_notification_once(
+        event_key, fingerprint, title, body, tag, notify_type
+    )
+
+
+def notify_persisted_protection_state():
+    try:
+        state = read_protection_state()
+        if state["manual_review"]:
+            reason = clean(state["failure_reason"]) or "manual review required"
+            if "HTTP 403" in reason.upper():
+                message = f"JacRed HTTP 403; manual review required; {reason}"
+            elif "HTTP 401" in reason.upper():
+                message = "JacRed HTTP 401; manual authentication/configuration review required"
+            else:
+                message = f"JacRed upstream blocked pending manual review; {reason}"
+            notify_upstream_problem(UpstreamCoolingDown(86400, message))
+        elif state["state"] == "OPEN":
+            reason = clean(state["failure_reason"]) or "protection cooldown active"
+            retry_after = max(
+                1,
+                math.ceil(float(state["block_until"] or time.time() + 1) - time.time()),
+            )
+            notify_upstream_problem(
+                UpstreamCoolingDown(retry_after, f"JacRed upstream circuit OPEN: {reason}")
+            )
+    except Exception as exc:
+        print(
+            f"APPRISE_STATE_WARNING action=startup-state-check error_type={type(exc).__name__}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def notify_startup_failure(exc):
+    error_code = getattr(exc, "errno", None)
+    fingerprint = f"{type(exc).__name__}:{error_code if error_code is not None else 'no-code'}"
+    send_notification_once(
+        "adapter:startup-failure",
+        fingerprint,
+        "Критическая ошибка запуска",
+        (
+            "Адаптер не смог инициализировать защиту upstream или открыть локальный "
+            f"Torznab endpoint 127.0.0.1:{PORT}. Тип ошибки: {type(exc).__name__}; "
+            f"код: {error_code if error_code is not None else 'не указан'}. "
+            "Проверьте журнал systemd."
+        ),
+        JACRED_NOTIFICATION_TAG_CRITICAL,
+        "failure",
+    )
 
 
 def parse_publish_date(value):
@@ -1906,11 +2324,13 @@ class Handler(BaseHTTPRequestHandler):
                                     file=sys.stderr,
                                     flush=True,
                                 )
-                    except UpstreamCoolingDown:
+                    except UpstreamCoolingDown as exc:
+                        notify_upstream_problem(exc, media_type)
                         # A circuit-open/cooldown condition is fatal for this
                         # operation: do not start remaining branches or aliases.
                         raise
                     except Exception as exc:
+                        notify_upstream_problem(exc, media_type)
                         errors.append((media_type, exc))
                         print(
                             f"UPSTREAM ERROR type={media_type} q={jac_query!r}: {exc}",
@@ -2003,11 +2423,22 @@ if __name__ == "__main__":
         print(f"Upstream protection state reset to CLOSED in {JACRED_STATE_PATH}", flush=True)
         sys.exit(0)
 
-    initialize_protection_state()
-    print(
-        f"{SERVER_TITLE} v{VERSION} listening on http://{HOST}:{PORT}/torznab; "
-        f"JacRed source={JACRED_URL}; minimum interval={JACRED_MIN_INTERVAL_MS}ms; "
-        f"state={JACRED_STATE_PATH}",
-        flush=True,
-    )
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    try:
+        initialize_protection_state()
+        print(
+            f"{SERVER_TITLE} v{VERSION} listening on http://{HOST}:{PORT}/torznab; "
+            f"JacRed source={JACRED_URL}; minimum interval={JACRED_MIN_INTERVAL_MS}ms; "
+            f"state={JACRED_STATE_PATH}; notifications={'enabled' if JACRED_NOTIFICATIONS_ENABLED else 'disabled'}",
+            flush=True,
+        )
+        server = ThreadingHTTPServer((HOST, PORT), Handler)
+        clear_notification_state_prefix("adapter:startup-failure")
+        threading.Thread(
+            target=notify_persisted_protection_state,
+            name="jacred-apprise-startup-notification",
+            daemon=True,
+        ).start()
+        server.serve_forever()
+    except Exception as exc:
+        notify_startup_failure(exc)
+        raise

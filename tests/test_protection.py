@@ -53,6 +53,9 @@ class ProtectionTests(unittest.TestCase):
         self.url = adapter.JACRED_URL
         self.interval = adapter.JACRED_MIN_INTERVAL_MS
         self.ua = adapter.JACRED_USER_AGENT
+        self.notifications_enabled = adapter.JACRED_NOTIFICATIONS_ENABLED
+        # Protection tests must never make real requests to the configured Apprise gateway.
+        adapter.JACRED_NOTIFICATIONS_ENABLED = False
         adapter.JACRED_STATE_PATH = os.path.join(self.temp.name, "state.sqlite3")
         adapter.JACRED_URL = "http://127.0.0.1:9/api/v2.0/indexers/all/results"
         adapter.JACRED_MIN_INTERVAL_MS = 1000
@@ -89,6 +92,7 @@ class ProtectionTests(unittest.TestCase):
         adapter.JACRED_URL = self.url
         adapter.JACRED_MIN_INTERVAL_MS = self.interval
         adapter.JACRED_USER_AGENT = self.ua
+        adapter.JACRED_NOTIFICATIONS_ENABLED = self.notifications_enabled
         self.temp.cleanup()
 
     def start_adapter_server(self):

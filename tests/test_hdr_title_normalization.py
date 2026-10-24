@@ -6,7 +6,7 @@ import jacred_v2_adapter as adapter
 class HDRTitleNormalizationTests(unittest.TestCase):
     def test_hdr10_plus_and_dolby_vision_are_both_preserved(self):
         title = "Lanterns 4K WEB-DL HDR10+, DV 8.1, 10-bit"
-        self.assertEqual(adapter.hdr_markers(title), ["HDR10+", "Dolby Vision"])
+        self.assertEqual(adapter.hdr_markers(title), ["HDR10", "HDR10+", "Dolby Vision"])
 
     def test_explicit_dolby_vision_and_dovi_aliases(self):
         self.assertEqual(adapter.hdr_markers("Movie 2160p Dolby Vision"), ["Dolby Vision"])
@@ -55,8 +55,47 @@ class HDRTitleNormalizationTests(unittest.TestCase):
     def test_title_markers_work_without_structured_resolution(self):
         self.assertEqual(
             adapter.extract_actual_quality({}, "Lanterns HDR10+ DV 8.1"),
-            "HDR10+ Dolby Vision",
+            "HDR10 HDR10+ Dolby Vision",
         )
+
+    def test_explicit_dolby_vision_profile_8_1_adds_hdr10_compatibility(self):
+        cases = (
+            "Movie 2160p DV 8.1",
+            "Movie 2160p DV Profile 8.1",
+            "Movie 2160p Dolby Vision Profile 8.1",
+            "Movie 2160p DoVi P8.1",
+        )
+        for title in cases:
+            with self.subTest(title=title):
+                self.assertEqual(
+                    adapter.hdr_markers(title),
+                    ["HDR10", "Dolby Vision"],
+                )
+
+    def test_profile_8_1_does_not_duplicate_hdr10_and_does_not_broaden_to_other_profiles(self):
+        self.assertEqual(
+            adapter.hdr_markers("Movie HDR10 Dolby Vision Profile 8.1"),
+            ["HDR10", "Dolby Vision"],
+        )
+        self.assertEqual(adapter.hdr_markers("Movie DV P8"), ["Dolby Vision"])
+        self.assertEqual(adapter.hdr_markers("Movie DV Profile 5"), ["Dolby Vision"])
+        self.assertEqual(adapter.hdr_markers("Movie unqualified DV"), [])
+
+    def test_profile_8_1_normalized_title_keeps_original_source_title(self):
+        source = "Example Movie 2160p WEB-DL DV 8.1"
+        item = {
+            "Title": source,
+            "info": {
+                "name": "Example Movie",
+                "originalname": "Example Movie",
+                "relased": 2026,
+                "quality": 2160,
+                "types": ["movie"],
+            },
+        }
+        title = adapter.make_movie_title(item)
+        self.assertIn("2160p HDR10 Dolby Vision", title)
+        self.assertIn("*** " + source, title)
 
     def test_normalized_tv_title_preserves_original_source_title(self):
         source = "Lanterns S01E01 WEB-DL 1080p HDR10+ DV 8.1"
@@ -71,7 +110,7 @@ class HDRTitleNormalizationTests(unittest.TestCase):
             },
         }
         title = adapter.make_tv_title(item)
-        self.assertIn("1080p HDR10+ Dolby Vision", title)
+        self.assertIn("1080p HDR10 HDR10+ Dolby Vision", title)
         self.assertIn("*** " + source, title)
 
     def test_normalized_movie_title_preserves_original_source_title(self):

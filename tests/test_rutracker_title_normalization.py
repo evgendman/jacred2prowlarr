@@ -189,6 +189,33 @@ class RuTrackerTitleNormalizationTests(unittest.TestCase):
         normalized = adapter.normalize_season_episode("Lexx / Сезон: 1")
         self.assertNotIn("E", normalized)
 
+    def test_orphaned_parenthesis_is_removed_from_normalized_series_name(self):
+        source_title = "Уламки (Сезон 1) / Debris (Season 1) (2021) WEBRip 1080p"
+        item = {
+            "Title": source_title,
+            "Details": "https://example.invalid/debris",
+            "PublishDate": "2026-10-24T00:00:00Z",
+            "Category": [5000],
+            "Size": 123456,
+            "Seeders": 1,
+            "Peers": 0,
+            "info": {
+                "name": "Debris (1 сезон",
+                "originalname": "Debris (1 сезон",
+                "relased": 2021,
+                "quality": 1080,
+                "types": ["serial"],
+                "voices": [],
+            },
+        }
+        title = adapter.make_tv_title(item)
+        self.assertTrue(
+            title.startswith("Debris S01 (2021) WEBRip 1080p"),
+            title,
+        )
+        self.assertNotIn("Debris ( S01", title)
+        self.assertIn("*** " + source_title, title)
+
 
 if __name__ == "__main__":
     unittest.main()
