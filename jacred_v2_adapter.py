@@ -1594,7 +1594,9 @@ def query_jacred(query, year, media_type):
             # An error must never clear the active block or failure escalation.
             if "data" in locals() and isinstance(data, dict) and isinstance(data.get("Results") or [], list):
                 register_upstream_success(probe)
-                clear_notification_state_prefix("upstream:")
+                clear_notification_state_prefix("upstream:global:")
+                clear_notification_state_prefix(f"upstream:branch:{media_type}:")
+                clear_notification_state_prefix(f"adapter:branch:{media_type}:")
             elif probe:
                 # A failed recovery probe must leave the circuit OPEN, even for
                 # transport errors or malformed JSON that are not HTTP status codes.
@@ -1814,7 +1816,7 @@ def notify_upstream_problem(exc, media_type=""):
     }.get(media_type, "общая проверка upstream")
 
     if status == 401 or "manual authentication/configuration review" in lower:
-        event_key = "upstream:authentication"
+        event_key = "upstream:global:authentication"
         fingerprint = "http-401-manual-review"
         tag = JACRED_NOTIFICATION_TAG_CRITICAL
         notify_type = "failure"
@@ -1825,7 +1827,7 @@ def notify_upstream_problem(exc, media_type=""):
         )
     elif status == 403:
         manual = "manual review" in lower
-        event_key = "upstream:access-block"
+        event_key = "upstream:global:access-block"
         fingerprint = "http-403-manual-review" if manual else "http-403-protection-block"
         tag = JACRED_NOTIFICATION_TAG_CRITICAL
         notify_type = "failure"
@@ -1846,7 +1848,7 @@ def notify_upstream_problem(exc, media_type=""):
     elif status == 429:
         stage_match = re.search(r"(?i)\bstage\s+(\d+)", message)
         stage = int(stage_match.group(1)) if stage_match else 1
-        event_key = "upstream:rate-limit"
+        event_key = "upstream:global:rate-limit"
         fingerprint = f"http-429-stage-{stage}"
         tag = JACRED_NOTIFICATION_TAG_WARNINGS
         notify_type = "warning"
@@ -1857,7 +1859,7 @@ def notify_upstream_problem(exc, media_type=""):
             "Подробности — в журнале службы."
         )
     elif "queue" in lower or "maximum queue wait" in lower or "deferred for" in lower:
-        event_key = "upstream:queue"
+        event_key = f"upstream:branch:{media_type or 'generic'}:queue"
         fingerprint = "queue-wait-exceeded"
         tag = JACRED_NOTIFICATION_TAG_WARNINGS
         notify_type = "warning"
@@ -1872,7 +1874,7 @@ def notify_upstream_problem(exc, media_type=""):
         or "timeout" in lower
         or "timed out" in lower
     ):
-        event_key = "upstream:transport"
+        event_key = f"upstream:branch:{media_type or 'generic'}:transport"
         fingerprint = f"transport-{type(exc).__name__}"
         tag = JACRED_NOTIFICATION_TAG_WARNINGS
         notify_type = "warning"
@@ -1883,7 +1885,7 @@ def notify_upstream_problem(exc, media_type=""):
             "при следующем обращении. Подробности — в журнале службы."
         )
     elif status is not None:
-        event_key = "upstream:http-error"
+        event_key = f"upstream:branch:{media_type or 'generic'}:http-error"
         fingerprint = f"http-{status}"
         tag = JACRED_NOTIFICATION_TAG_WARNINGS
         notify_type = "warning"
@@ -1893,7 +1895,7 @@ def notify_upstream_problem(exc, media_type=""):
             "Проверьте доступность источника и журнал службы."
         )
     elif isinstance(exc, UpstreamCoolingDown):
-        event_key = "upstream:protection"
+        event_key = f"upstream:branch:{media_type or 'generic'}:protection"
         fingerprint = f"cooldown-{type(exc).__name__}"
         tag = JACRED_NOTIFICATION_TAG_WARNINGS
         notify_type = "warning"
@@ -1903,7 +1905,7 @@ def notify_upstream_problem(exc, media_type=""):
             "Проверьте состояние upstream в журнале службы."
         )
     else:
-        event_key = "adapter:request-error"
+        event_key = f"adapter:branch:{media_type or 'generic'}:request-error"
         fingerprint = f"request-error-{type(exc).__name__}"
         tag = JACRED_NOTIFICATION_TAG_CRITICAL
         notify_type = "failure"
