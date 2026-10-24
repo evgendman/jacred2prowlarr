@@ -1923,9 +1923,9 @@ def notify_persisted_protection_state():
         state = read_protection_state()
         if state["manual_review"]:
             reason = clean(state["failure_reason"]) or "manual review required"
-            if re.search(r"(?i)\\bHTTP\\s+403\\b", reason):
+            if "HTTP 403" in reason.upper():
                 message = f"JacRed HTTP 403; manual review required; {reason}"
-            elif re.search(r"(?i)\\bHTTP\\s+401\\b", reason):
+            elif "HTTP 401" in reason.upper():
                 message = "JacRed HTTP 401; manual authentication/configuration review required"
             else:
                 message = f"JacRed upstream blocked pending manual review; {reason}"
