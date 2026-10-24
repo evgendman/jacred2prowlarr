@@ -1922,12 +1922,14 @@ def notify_persisted_protection_state():
     try:
         state = read_protection_state()
         if state["manual_review"]:
-            notify_upstream_problem(
-                UpstreamCoolingDown(
-                    86400,
-                    "JacRed HTTP 401; upstream blocked pending manual authentication/configuration review",
-                )
-            )
+            reason = clean(state["failure_reason"]) or "manual review required"
+            if re.search(r"(?i)\\bHTTP\\s+403\\b", reason):
+                message = f"JacRed HTTP 403; manual review required; {reason}"
+            elif re.search(r"(?i)\\bHTTP\\s+401\\b", reason):
+                message = "JacRed HTTP 401; manual authentication/configuration review required"
+            else:
+                message = f"JacRed upstream blocked pending manual review; {reason}"
+            notify_upstream_problem(UpstreamCoolingDown(86400, message))
         elif state["state"] == "OPEN":
             reason = clean(state["failure_reason"]) or "protection cooldown active"
             retry_after = max(
