@@ -111,6 +111,27 @@ class NotificationTests(unittest.TestCase):
             )
         urlopen.assert_not_called()
 
+    def test_persisted_manual_review_after_http_403_keeps_critical_403_classification(self):
+        state = {
+            "manual_review": 1,
+            "state": "OPEN",
+            "failure_reason": "HTTP 403; manual review required",
+            "block_until": 0,
+        }
+        response = self.successful_response()
+        with (
+            mock.patch.object(adapter, "JACRED_NOTIFICATIONS_ENABLED", True),
+            mock.patch.object(adapter, "read_protection_state", return_value=state),
+            mock.patch.object(adapter.urllib.request, "urlopen", return_value=response) as urlopen,
+        ):
+            adapter.notify_persisted_protection_state()
+
+        self.assertEqual(urlopen.call_count, 1)
+        payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(payload["tag"], "critical")
+        self.assertEqual(payload["type"], "failure")
+        self.assertIn("HTTP 403", payload["body"])
+
     def test_upstream_403_is_critical_and_429_is_a_warning(self):
         with mock.patch.object(adapter, "send_notification_once") as send:
             adapter.notify_upstream_problem(
