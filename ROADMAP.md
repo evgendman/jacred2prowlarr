@@ -2,9 +2,9 @@
 
 [English documentation](README.md) | [Документация на русском](README.ru.md)
 
-Current release on MINI-Ubuntu remains **2.4.4** until deployment. Candidate **2.4.5** is on [feature/v2.4.5-debris-notifications-hdr](https://github.com/evgendman/jacred2prowlarr/tree/feature/v2.4.5-debris-notifications-hdr): Debris orphaned-parenthesis cleanup, no-server mock tests for queue-lock expiry/transport timeout/partial branch failure, shared Apprise notifications and explicit Dolby Vision Profile 8.1 → HDR10 compatibility labeling. CI review and production deployment are pending.
+Current release on MINI-Ubuntu: **2.4.5**, deployed and validated on 2026-10-24. [PR #9](https://github.com/evgendman/jacred2prowlarr/pull/9) was merged as commit [`25c4be71eceb8c7ca0e7e09a45b45da7fa1729ce`](https://github.com/evgendman/jacred2prowlarr/commit/25c4be71eceb8c7ca0e7e09a45b45da7fa1729ce). [CI run #61 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/40075956041): compilation and all 64 unit tests passed. The scoped deployment helper verified version 2.4.5, active service, zero restarts, and Torznab caps HTTP 200. A live Debris search returned 42 records and none had an orphaned opening parenthesis before the season marker. The Apprise gateway returned HTTP 200 for explicit `warnings` and `critical` smoke-test posts. Deployment log on MINI-Ubuntu: `/tmp/jacred-v2.4.5-deploy.log`; helper log: `/var/log/jacred-v2-adapter-deploy.log`; rollback backup: `/var/lib/jacred-v2-adapter-deploy/jacred_v2_adapter.py.20261024-125510.bak`.
 
-Version **2.4.3** extends title parsing for season-only markers (`[S01]`, `Сезон 1`, `Season 1`), Russian labelled episodes without colons, and explicit multi-season ranges such as `Сезоны: 1-4`. For a multi-season release, a global episode total such as `1-61` is not fabricated as `S01E01-61`. [PR #7](https://github.com/evgendman/jacred2prowlarr/pull/7) is merged and the version is installed on the production host. Manual visual review in Sonarr on 2026-10-24 covered Debris, Lexx and other representative results; season association was broadly correct. A remaining orphaned parenthesis in some Debris names is targeted by candidate v2.4.5.
+Version **2.4.3** extends title parsing for season-only markers (`[S01]`, `Сезон 1`, `Season 1`), Russian labelled episodes without colons, and explicit multi-season ranges such as `Сезоны: 1-4`. For a multi-season release, a global episode total such as `1-61` is not fabricated as `S01E01-61`. [PR #7](https://github.com/evgendman/jacred2prowlarr/pull/7) is merged and the version is installed on the production host. Manual visual review in Sonarr on 2026-10-24 covered Debris, Lexx and other representative results; season association was broadly correct. The remaining Debris title-formatting issue was corrected and verified in v2.4.5.
 
 Version **2.4.1** fixes ffprobe stream selection when JacRed exposes a large attached cover/image as `codec_type=video`. The fix has passed CI and was installed on MINI-Ubuntu on 2026-10-23. Deployment log: `jacred2prowlarr-2.4.1-deploy.log` (37 tests passed; service active; Torznab caps and synthetic movie checks returned HTTP 200). The v2.4.1 change set is tracked in [PR #5](https://github.com/evgendman/jacred2prowlarr/pull/5).
 
@@ -57,7 +57,7 @@ The v2.4.0 release and its HDR-specific acceptance checks are complete. The item
    - Radarr 1080p and 4K.
 2. **Cross-client/cache behavior — accepted as complete for this stage.** Existing journal entries prove both rendered-response `CACHE HIT` and raw-source `SOURCE CACHE HIT` during repeated real searches (including repeated Debris and Tulsa King searches). Per user decision on 2026-10-24, no additional independent-filter test matrix is planned at this stage.
 3. **Combined automatic selection.** HDR title normalization and the relevant Sonarr/Radarr behavior have been checked. The broader combined ranking path still needs an explicitly recorded end-to-end case covering preferred voice/dubbing scores together with resolution, source format and HDR. Scoring policy belongs to Sonarr/Radarr.
-4. **Mock-upstream failure coverage.** The v2.4.5 candidate adds tests using Python mocks only (no separate test HTTP server): queue-lock expiry without a network request, a simulated upstream transport timeout, failure non-caching, and a movie-branch timeout with a successful TV result preserved. Existing protection tests continue to use their pre-existing local HTTP harness; no new test server was added.
+4. **Mock-upstream failure coverage — completed in v2.4.5.** New tests use Python mocks only (no new HTTP test server): queue-lock expiry without an outbound request, simulated upstream transport timeout, proof that failed source results are not cached, and a movie-branch timeout while successful TV results remain available and the incomplete feed is not cached. The complete suite passes in CI run #61 (64 tests). Existing protection tests continue to use their pre-existing local HTTP harness.
 
 
 ## v2.4.1 candidate: exclude attached images from ffprobe quality detection
@@ -109,7 +109,7 @@ The title supplied in chat may contain Markdown/link/table wrappers. Tests must 
 - [x] Handle contiguous explicit lists such as `[s3,s4]` as `S03-S04`, while avoiding fabricated ranges for non-contiguous lists.
 - [x] CI run [#49 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/39952523992): Python compilation and all 47 unit tests succeeded.
 - [x] Deployed on MINI-Ubuntu on 2026-10-23: all 47 tests passed locally; targeted title/description fixtures matched; local Torznab caps and movie checks returned HTTP 200; service is active.
-- [ ] Confirm Sonarr maps representative real season-only and multi-season results correctly.
+- [x] Visual review by the user in Sonarr on 2026-10-24 confirmed that representative season-only and multi-season results for Lexx, Debris and other titles are mapped broadly correctly. The follow-up Debris punctuation defect was fixed in v2.4.5 and verified through a fresh 42-item live query.
 
 Expected examples:
 
@@ -135,21 +135,30 @@ Preserve the original source title after `***` and in Torznab `description`. Epi
 
 The parser handles season-first range and single-episode forms before the generic season-range fallback. The existing earlier check for collection titles such as `1-4 сезоны: 1-61 серии из 61` remains first so a multi-season total is not misclassified as one season's episode range.
 
-## Apprise error and warning notifications (candidate v2.4.5)
+## v2.4.5: Debris cleanup, no-server mock coverage, Apprise and HDR Profile 8.1 (deployed)
 
-The v2.4.5 candidate implements the shared notification-gateway contract without direct Telegram bot credentials or per-adapter chat configuration. Configuration uses `http://192.168.0.14:8000/notify/arr-stack`, the `warnings` tag for recoverable conditions and `critical` for access/manual-review/startup failures, a bounded five-second timeout, and persistent SQLite deduplication. Delivery is best-effort; messages omit secrets, release names, hashes and magnets. Unit tests mock the Apprise HTTP call, with no test server.
+- [x] Remove parenthesized season suffixes/orphaned opening delimiters from the normalized series identity before adding `Sxx` season notation; retain the source title unchanged after `***` and in the Torznab description.
+- [x] Add mock-only tests for queue-lock expiry (no outgoing request), simulated upstream timeout, failure non-caching and partial movie/TV branch failure.
+- [x] Add shared Apprise notifications, persistent branch-scoped deduplication and recovery clearing; no Telegram credentials are stored in the adapter.
+- [x] Treat an explicit Dolby Vision Profile 8.1 release title as HDR10-compatible while retaining Dolby Vision; do not generalize to ambiguous DV or other profiles.
+- [x] CI run [#61 passed](https://github.com/evgendman/jacred2prowlarr/actions/runs/40075956041): Python compilation and 64 unit tests succeeded.
+- [x] Deployed via the pre-authorized scoped helper on MINI-Ubuntu on 2026-10-24. The helper verified version 2.4.5, active service and successful Torznab caps. A live `Debris` query returned 42 records; no normalized title showed the orphaned-parenthesis pattern.
+- [x] The live Apprise API accepted smoke-test notification payloads for both `warnings` and `critical` with HTTP 200.
 
-Implementation and deployment are pending CI review; do not mark this feature deployed before the release script verifies service health.
+## Apprise error and warning notifications (implemented and deployed in v2.4.5)
 
-- [ ] Send terminal/fatal errors using the shared `critical` tag; send recoverable warnings using `warnings`.
-- [ ] Route notifications through the shared Apprise API using configurable `apprise_url` and the agreed `arr-stack` configuration key. The gateway, not this adapter, owns Telegram bot credentials and the mapping to the approved Telegram forum topics (including `Предупреждения` and `Информация о выполнении`).
-- [ ] Emit actionable events for adapter startup/configuration failures and persistent upstream-protection/manual-review states; use warnings for recoverable upstream failures, rate limits/backoff, queue timeouts and transient availability issues.
-- [ ] Aggregate or deduplicate repeated unchanged conditions so repeated *Arr searches do not flood Telegram. A change of state or a new terminal incident should still be visible.
-- [ ] Sanitize notifications: never include API keys, authorization data, full credential-bearing URLs, magnets or torrent hashes. Include a concise failure reason and relevant adapter state instead.
-- [ ] Keep notification delivery best-effort: an Apprise/Telegram outage must not break Torznab responses or upstream-protection logic. Record delivery failures safely and avoid infinite notification retries.
-- [ ] Add unit tests with a mocked Apprise endpoint for route tags, payload shape, redaction, deduplication/aggregation, gateway failure and disabled notifications; verify routing against the agreed Telegram topics before deployment.
+The adapter uses the shared notification gateway at `http://192.168.0.14:8000/notify/arr-stack`, without direct Telegram credentials or per-adapter chat/topic configuration. It uses `warnings` for recoverable failures and `critical` for access blocks, manual-review states and adapter startup failures. Notification timeout is bounded to five seconds; delivery is best-effort and does not change Torznab responses or upstream protection logic. A persistent SQLite fingerprint table suppresses repeated unchanged incidents, with deduplication scoped to global protection or the affected media branch. Messages omit secrets, release titles, hashes, magnets and credential-bearing URLs.
 
-Acceptance criteria: a recoverable upstream warning reaches the `warnings` route; a terminal error reaches the `critical` route; repeated identical events are suppressed; no Telegram secrets or release identifiers leak into messages; and the adapter continues to serve its normal error response if notification delivery fails.
+- [x] Send terminal/fatal errors using `critical` and recoverable warnings using `warnings`.
+- [x] Route notifications through the shared Apprise API using config key `arr-stack` and the agreed base address and port.
+- [x] Emit actionable notifications for adapter startup failures and persistent upstream-protection/manual-review states; use warnings for recoverable upstream failures, rate limits/backoff, queue timeouts and transient availability issues.
+- [x] Deduplicate unchanged events, and clear the corresponding state after recovery so a later recurrence can notify again.
+- [x] Redact messages to exclude API keys, authorization data, credential-bearing URLs, magnets, hashes and release titles.
+- [x] Keep delivery best-effort: Apprise outages cannot break the main query or protection state.
+- [x] Add mock-based unit tests for payload, routing tags, persistent deduplication, gateway failures, disabled notifications and status classification; no separate test HTTP server was added.
+- [x] After deployment, send one explicitly marked smoke-test POST to each `warnings` and `critical` route; both requests were accepted by the Apprise API with HTTP 200. This confirms gateway acceptance, not direct inspection of a Telegram client receipt.
+
+CI run #61 passed compilation and all 64 unit tests. Deployment was verified on MINI-Ubuntu on 2026-10-24: service active, Torznab caps returned HTTP 200, and the scoped deployment helper recorded a successful v2.4.5 installation.
 
 ## v2.4.0: title-only HDR label normalization
 
@@ -181,17 +190,17 @@ These figures validate the existing title-based behavior on a broad, real-world 
 
 Do not implement source-only HDR subtype inference with the current schema. Generic `info.videotype`, codec, resolution and bit depth are insufficient evidence for a specific HDR standard. Reconsider this item only if the actual JacRed result starts exposing structured, relevant HDR/Dolby Vision fields consistently. No additional live probing is planned merely to search again for fields that the current schema does not return.
 
-### Dolby Vision Profile 8.1 compatibility marker (candidate v2.4.5)
+### Dolby Vision Profile 8.1 compatibility marker (implemented in v2.4.5)
 
-The representative sample already contained two explicit Profile 8.1 examples: `Project Hail Mary` and `Backrooms`. No separate live sampling campaign is needed. The v2.4.5 candidate adds `HDR10` when a release title explicitly states Profile 8.1 and retains `Dolby Vision`; ambiguous `DV`, unspecified Profile 8, and other profiles do not trigger this inference. Deterministic unit coverage is included; CI and deployment remain pending.
+The representative sample already contained two explicit Profile 8.1 examples: `Project Hail Mary` and `Backrooms`; no additional live sampling was needed. Per user decision, an explicit Profile 8.1 marker is sufficient to add `HDR10` compatibility while retaining `Dolby Vision`. This treats HDR10 compatibility as useful metadata regardless of whether Dolby Vision metadata is also present.
 
-Dolby documents Profile 8.1 as cross-compatible with HDR10 devices ([Profile overview](https://professionalsupport.dolby.com/s/article/What-is-Dolby-Vision-Profile), [Dolby Vision encoding FAQ](https://professionalsupport.dolby.com/s/article/Dolby-Vision-Encoding-using-Blackmagic-Design-DaVinci-Resolve-Studio-AQs?language=en_US)). The remaining question is not sample coverage but scoring semantics: adding a plain `HDR10` token to a Profile 8.1 title could also match a Sonarr/Radarr Custom Format intended to reward **native HDR10**, and therefore alter scores in a way that does not mean “HDR10-compatible”.
+- [x] Add `HDR10` to the normalized title when the source title explicitly identifies Profile 8.1 and the marker is missing.
+- [x] Preserve `Dolby Vision` and avoid duplicate `HDR10` markers.
+- [x] Do not infer compatibility from bare/ambiguous `DV`, unspecified Profile 8, or another profile.
+- [x] Add deterministic unit tests for supported spellings, no-duplicate behavior, non-inference for other profiles, and original-title preservation; the full suite passes in CI run #61.
+- [x] Document the rule in both English and Russian README/HDR policy files.
 
-- [ ] Before implementation, check the actual HDR10 Custom Format rules and decide whether the `HDR10` token denotes native HDR10 or HDR10 base-layer compatibility.
-- [ ] If compatibility should be represented independently, prefer a distinct canonical token such as `HDR10-compatible` and a matching Custom Format rather than silently treating a Dolby Vision Profile 8.1 release as native HDR10. Use the plain `HDR10` marker only if that scoring meaning is explicitly intended.
-- [ ] If this rule is approved later, validate it as part of the same code change with a few deterministic unit fixtures in the ordinary suite (explicit Profile 8.1 adds a missing compatibility marker, no duplicate, ambiguous `DV`/unspecified Profile 8/Profile 5 does not trigger inference, and the source title remains unchanged). These fixtures are regression guards for the transformation, not a separate data-collection exercise.
-
-No Profile 8.1 code change or new live-test campaign is currently scheduled. Title-derived labels remain hints based on the releaser's wording, not independent verification of the encoded stream or universal playback compatibility. Details of the existing title-only rules: [English policy](docs/hdr-title-normalization.md) and [Russian policy](docs/hdr-title-normalization.ru.md).
+The labels are derived from the explicit release-title claim, not independent inspection of the encoded stream. See [English policy](docs/hdr-title-normalization.md) and [Russian policy](docs/hdr-title-normalization.ru.md).
 
 ## v2.3.0: local source and persistent upstream protection
 
@@ -275,7 +284,7 @@ Adjust the service account and interpreter path to match the actual unit. Resett
 - TV parent category `5000` and Anime subcategory `5070`; movie parent `2000` and supported movie source categories `2010, 2020, 2030, 2040, 2045, 2050, 2060, 2070, 2080, 2090`.
 - Movie and TV records use separate title-formatting branches.
 - Movie subcategory filtering does not discard a release merely because JacRed only supplied its parent category; unsupported source details are not invented.
-- Quality detection priority remains ffprobe dimensions → JacRed `info.quality` → release title. An issue was identified on 2026-10-22: `first_video_stream()` can select a very large PNG cover/image exposed as a `video` stream instead of the actual H.264 video, causing a false `2160p` result even when JacRed's `info.quality` and the source title both indicate `1080p`. Track the fix and regression criteria in [attached-image quality detection](#planned-exclude-attached-images-from-ffprobe-quality-detection). Video resolution/codec metadata may be exposed when available. v2.4.0 normalizes title-derived `HDR10`, `HDR10+`, `Dolby Vision` / `DoVi`, generic `HDR` and `SDR` markers into the normalized title. A conditional Profile 8.1 compatibility-marker follow-up is tracked below and is gated on the meaning of the HDR10 Custom Format in Sonarr/Radarr; these labels remain title-derived or source-metadata-derived hints, not independent verification of video playback.
+- Quality detection priority remains ffprobe dimensions → JacRed `info.quality` → release title. An issue was identified on 2026-10-22: `first_video_stream()` can select a very large PNG cover/image exposed as a `video` stream instead of the actual H.264 video, causing a false `2160p` result even when JacRed's `info.quality` and the source title both indicate `1080p`. Track the fix and regression criteria in [attached-image quality detection](#planned-exclude-attached-images-from-ffprobe-quality-detection). Video resolution/codec metadata may be exposed when available. v2.4.0 normalizes title-derived `HDR10`, `HDR10+`, `Dolby Vision` / `DoVi`, generic `HDR` and `SDR` markers into the normalized title. An explicit Dolby Vision Profile 8.1 release-title marker adds `HDR10` compatibility while retaining `Dolby Vision`; these labels remain title-derived hints, not independent verification of video playback.
 - Voice metadata is taken in priority order from Russian audio-stream tags in ffprobe, JacRed `info.voices`, or supported MVO patterns in the source title. Available language information is also exposed in Torznab metadata.
 - Formatted title retains the original source title after `***` when it differs from the normalized title, and the original title is also the Torznab description.
 - Standard torrent enclosure MIME type, magnet URL, infohash and source date parsing.
