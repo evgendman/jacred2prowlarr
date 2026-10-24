@@ -110,7 +110,7 @@ class HDRTitleNormalizationTests(unittest.TestCase):
             },
         }
         title = adapter.make_tv_title(item)
-        self.assertIn("1080p HDR10+ Dolby Vision", title)
+        self.assertIn("1080p HDR10 HDR10+ Dolby Vision", title)
         self.assertIn("*** " + source, title)
 
     def test_normalized_movie_title_preserves_original_source_title(self):
