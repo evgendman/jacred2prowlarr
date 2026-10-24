@@ -2433,7 +2433,11 @@ if __name__ == "__main__":
         )
         server = ThreadingHTTPServer((HOST, PORT), Handler)
         clear_notification_state_prefix("adapter:startup-failure")
-        notify_persisted_protection_state()
+        threading.Thread(
+            target=notify_persisted_protection_state,
+            name="jacred-apprise-startup-notification",
+            daemon=True,
+        ).start()
         server.serve_forever()
     except Exception as exc:
         notify_startup_failure(exc)
