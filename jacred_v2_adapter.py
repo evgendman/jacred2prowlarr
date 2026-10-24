@@ -1392,6 +1392,14 @@ def with_canonical_tv_title(item, canonical_title):
 
 
 def normalize_tv_original(text):
+    # Remove a season suffix even when the source identity includes the opener
+    # before the number ("Debris (1 сезон") or English "Season 1".
+    text = re.sub(
+        r"(?i)\s*[\(\[\{]?\s*\d{1,3}\s*(?:-?(?:й|ой|ый|ого|го|ему|ому|му|м|ом|ым))?\s+сез\w*\s*[\)\]\}]?\s*$",
+        "",
+        text,
+    )
+    text = re.sub(r"(?i)\s*[\(\[\{]?\s*season\s+\d{1,3}\s*[\)\]\}]?\s*$", "", text)
     text = re.sub(r"(?i)\s*\[\s*\d{1,3}\s*[xх×]\s*\d{1,4}(?:\s*[-–—]\s*\d{1,4})?(?:\s+из\s+\d{1,4})?\s*\]", "", text)
     text = re.sub(r"(?i)\s+\bS\d{1,3}(?:E\d{1,4}(?:-\d{1,4})?)?\b", "", text)
     text = re.sub(r"(?i)\s+\b\d{1,3}\s*(?:-?(?:й|ой|ый|ого|го|ему|ому|му|м|ом|ым))?\s+сез\w*", "", text)
